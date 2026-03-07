@@ -14,14 +14,14 @@
 #include <string.h>
 #include <ctype.h>
 
-////////////////// Public types ////////////////////////
+//////////// Public types ////////////////
 
-#define SEIN_MAX_SECTIONS   128
-#define SEIN_MAX_KEYS       256
-#define SEIN_MAX_KEY_LEN    128
-#define SEIN_MAX_VAL_LEN    1024
-#define SEIN_MAX_SEC_LEN    128
-#define SEIN_MAX_INCLUDE_DEPTH 8
+#define SEIN_MAX_SECTIONS      32
+#define SEIN_MAX_KEYS          64
+#define SEIN_MAX_KEY_LEN      128
+#define SEIN_MAX_VAL_LEN      512
+#define SEIN_MAX_SEC_LEN      128
+#define SEIN_MAX_INCLUDE_DEPTH  8
 
 typedef struct {
     char key[SEIN_MAX_KEY_LEN];
@@ -39,11 +39,15 @@ typedef struct {
     int         section_count;
 } SeinConfig;
 
-///////////////////// Public API //////////////////////
+
+/////////////// Public API ////////////////
 
 int sein_parse(SeinConfig *cfg, const char *path);
 
 void sein_free(SeinConfig *cfg);
+
+SeinConfig *sein_alloc(void);
+void        sein_destroy(SeinConfig *cfg);
 
 const char *sein_get(const SeinConfig *cfg, const char *section,
                      const char *key,   const char *fallback);
@@ -69,11 +73,11 @@ int sein_get_int_array  (const SeinConfig *cfg, const char *section,
                          const char *key, char delim,
                          int *out,   int max_out);
 
-
-/////////////// IMPLEMENTATION ////////////////////
+////////////////// IMPLEMENTATION ///////////////////
 #ifdef SEIN_IMPLEMENTATION
 
-/////////////// internal helpers /////////////////////
+//////////////// internal helpers //////////////////
+
 static char *sein__trim_inplace(char *s)
 {
     while (*s && isspace((unsigned char)*s)) ++s;
@@ -119,7 +123,7 @@ static SeinSection *sein__get_or_create_section(SeinConfig *cfg, const char *nam
 
 static void sein__set(SeinSection *sec, const char *key, const char *val)
 {
-    ////////// update existing key
+    /// update existing key ///
     for (int i = 0; i < sec->entry_count; ++i) {
         if (strcmp(sec->entries[i].key, key) == 0) {
             strncpy(sec->entries[i].val, val, SEIN_MAX_VAL_LEN - 1);
@@ -127,7 +131,7 @@ static void sein__set(SeinSection *sec, const char *key, const char *val)
             return;
         }
     }
-    /////// insert new key
+    /// insert new key ///
     if (sec->entry_count >= SEIN_MAX_KEYS) {
         fprintf(stderr, "[SEIN Parser]: key limit reached in section '%s'\n", sec->name);
         return;
@@ -154,6 +158,7 @@ static void sein__parse_file(SeinConfig *cfg, const char *path, int depth)
         return;
     }
 
+    /// derive base directory for relative @includes ///
     char base_dir[512] = "";
     const char *slash = strrchr(path, '/');
 #ifdef _WIN32
@@ -171,18 +176,19 @@ static void sein__parse_file(SeinConfig *cfg, const char *path, int depth)
     char current_section[SEIN_MAX_SEC_LEN] = "Default";
     char line[SEIN_MAX_VAL_LEN * 2];
 
-    ///// backslash-multiline state
+    /// backslash-multiline state //
     char ml_key[SEIN_MAX_KEY_LEN] = "";
     char ml_val[SEIN_MAX_VAL_LEN] = "";
     int  in_multiline = 0;
 
-    //// raw-string R(...)R state
+    /// raw-string R(...)R state ///
     char raw_key[SEIN_MAX_KEY_LEN] = "";
     char raw_val[SEIN_MAX_VAL_LEN] = "";
     int  in_raw = 0;
 
     while (fgets(line, (int)sizeof(line), f)) {
 
+        /// raw-string block ///
         if (in_raw) {
             char *end_pos = strstr(line, ")R\"");
             if (end_pos) {
@@ -207,6 +213,7 @@ static void sein__parse_file(SeinConfig *cfg, const char *path, int depth)
             continue;
         }
 
+        /// backslash multiline continuation ///
         if (in_multiline) {
             sein__strip_comment(line);
             char *cl = sein__trim_inplace(line);
@@ -233,12 +240,11 @@ static void sein__parse_file(SeinConfig *cfg, const char *path, int depth)
             continue;
         }
 
-        ///////// normal line
         sein__strip_comment(line);
         char *clean = sein__trim_inplace(line);
         if (!clean || *clean == '\0') continue;
 
-        /// @include "other.sein" 
+        /// @include "other.sein" ///
         if (strncmp(clean, "@include", 8) == 0) {
             char *inc = sein__trim_inplace(clean + 8);
             inc = sein__strip_quotes(inc);
@@ -248,7 +254,7 @@ static void sein__parse_file(SeinConfig *cfg, const char *path, int depth)
             continue;
         }
 
-        //////// [Section]
+        /// [Section] ///
         size_t clen = strlen(clean);
         if (clean[0] == '[' && clean[clen - 1] == ']') {
             clean[clen - 1] = '\0';
@@ -258,7 +264,7 @@ static void sein__parse_file(SeinConfig *cfg, const char *path, int depth)
             continue;
         }
 
-        ////////// key = value
+        /// key = value ///
         char *sep = strchr(clean, '=');
         if (!sep) continue;
 
@@ -266,7 +272,7 @@ static void sein__parse_file(SeinConfig *cfg, const char *path, int depth)
         char *key = sein__trim_inplace(clean);
         char *val = sein__trim_inplace(sep + 1);
 
-        /////////////// raw string: value starts with "R( ---- /////////////
+        /////////// ---- raw string: value starts with "R( ////////
         if (strncmp(val, "\"R(", 3) == 0) {
             char *end_pos = strstr(val + 3, ")R\"");
             if (end_pos) {
@@ -306,7 +312,7 @@ static void sein__parse_file(SeinConfig *cfg, const char *path, int depth)
     fclose(f);
 }
 
-//////////////////////// public API implementation ///////////////////////////
+//////////////// public API implementation ////////////////
 
 int sein_parse(SeinConfig *cfg, const char *path)
 {
@@ -317,7 +323,19 @@ int sein_parse(SeinConfig *cfg, const char *path)
 
 void sein_free(SeinConfig *cfg)
 {
-    (void)cfg; 
+    (void)cfg;
+}
+
+SeinConfig *sein_alloc(void)
+{
+    SeinConfig *cfg = (SeinConfig *)calloc(1, sizeof(SeinConfig));
+    if (!cfg) fprintf(stderr, "[SEIN Parser]: out of memory\n");
+    return cfg;
+}
+
+void sein_destroy(SeinConfig *cfg)
+{
+    free(cfg);
 }
 
 const char *sein_get(const SeinConfig *cfg, const char *section,
@@ -371,7 +389,7 @@ int sein_get_bool(const SeinConfig *cfg, const char *section,
     return fallback;
 }
 
-/////////////////// array helpers /////////////////////
+//////////// array helpers ///////////////
 static int sein__split(const char *val, char delim,
                        char out[][SEIN_MAX_VAL_LEN], int max_out)
 {
@@ -411,28 +429,42 @@ int sein_get_float_array(const SeinConfig *cfg, const char *section,
                          const char *key, char delim,
                          float *out, int max_out)
 {
-    char tokens[SEIN_MAX_KEYS][SEIN_MAX_VAL_LEN];
-    int n = sein_get_array(cfg, section, key, delim, tokens, max_out);
-    for (int i = 0; i < n; ++i) {
+    const char *v = sein_get(cfg, section, key, NULL);
+    if (!v) return 0;
+    int count = 0;
+    const char *p = v;
+    while (*p && count < max_out) {
+        while (*p == ' ' || *p == '\t') ++p;
+        if (*p == '\0') break;
         char *end;
-        float r = strtof(tokens[i], &end);
-        out[i] = (end != tokens[i]) ? r : 0.f;
+        float r = strtof(p, &end);
+        if (end == p) { while (*p && *p != delim) ++p; }
+        else { out[count++] = r; p = end; }
+        while (*p == ' ' || *p == '\t') ++p;
+        if (*p == delim) ++p;
     }
-    return n;
+    return count;
 }
 
 int sein_get_int_array(const SeinConfig *cfg, const char *section,
                        const char *key, char delim,
                        int *out, int max_out)
 {
-    char tokens[SEIN_MAX_KEYS][SEIN_MAX_VAL_LEN];
-    int n = sein_get_array(cfg, section, key, delim, tokens, max_out);
-    for (int i = 0; i < n; ++i) {
+    const char *v = sein_get(cfg, section, key, NULL);
+    if (!v) return 0;
+    int count = 0;
+    const char *p = v;
+    while (*p && count < max_out) {
+        while (*p == ' ' || *p == '\t') ++p;
+        if (*p == '\0') break;
         char *end;
-        long r = strtol(tokens[i], &end, 10);
-        out[i] = (end != tokens[i]) ? (int)r : 0;
+        long r = strtol(p, &end, 10);
+        if (end == p) { while (*p && *p != delim) ++p; }
+        else { out[count++] = (int)r; p = end; }
+        while (*p == ' ' || *p == '\t') ++p;
+        if (*p == delim) ++p;
     }
-    return n;
+    return count;
 }
 
 #endif
