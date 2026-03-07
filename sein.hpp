@@ -24,7 +24,6 @@ namespace fd::sein {
         return (pos != std::string::npos) ? line.substr(0, pos) : line;
     }
 
-    // Strips surrounding double quotes from a value if present: "hello" -> hello
     inline std::string strip_quotes(const std::string& val) {
         if (val.size() >= 2 && val.front() == '"' && val.back() == '"')
             return val.substr(1, val.size() - 2);
