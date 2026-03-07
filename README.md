@@ -78,7 +78,7 @@ int main(void)
 }
 ```
 
-** VSCode Extension **
+**VSCode Extension**
 install: 
 ```
 ext install Fepsid.sein-language-support
