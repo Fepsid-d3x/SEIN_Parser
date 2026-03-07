@@ -81,18 +81,18 @@ int main(void)
 
 int main(void)
 {
-    SeinConfig config;
-    sein_parse(&config, "config.sein");
+    SeinConfig *config = sein_alloc();
+    sein_parse(config, "config.sein");
 
-    const char *res = sein_get(&config, "Graphics", "Resolution", "1280x720");
-    int fullscreen = sein_get_bool(&config, "Graphics", "Fullscreen", 0);
-    float gamma = sein_get_float(&config, "Graphics", "Gamma", 1.0f);
+    const char *res = sein_get(config, "Graphics", "Resolution", "1280x720");
+    int fullscreen = sein_get_bool(config, "Graphics", "Fullscreen", 0);
+    float gamma = sein_get_float(config, "Graphics", "Gamma", 1.0f);
 
     char names[32][SEIN_MAX_VAL_LEN];
-    int name_count = sein_get_array(&config, "Players", "Names", ';', names, 32);
+    int name_count = sein_get_array(config, "Players", "Names", ';', names, 32);
 
     float vols[32];
-    int vol_count = sein_get_float_array(&config, "Audio", "Volumes", ',', vols, 32);
+    int vol_count = sein_get_float_array(config, "Audio", "Volumes", ',', vols, 32);
 
     printf("Resolution: %s\n", res);
     printf("Fullscreen: %s\n", fullscreen ? "true" : "false");
@@ -101,7 +101,7 @@ int main(void)
     if (name_count > 0)
         printf("First player: %s\n", names[0]);
 
-    sein_free(&config);
+    sein_free(config);
     return 0;
 }
 ```
