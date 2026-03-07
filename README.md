@@ -76,8 +76,3 @@ int main(void)
 
     return 0;
 }
-<<<<<<< HEAD
-```
-=======
-```
->>>>>>> a2bad3d (Initial commit for SEIN Parser)
