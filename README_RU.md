@@ -72,3 +72,11 @@ int main(void)
 
     return 0;
 }
+
+** VSCode Extension **
+https://marketplace.visualstudio.com/items?itemName=Fepsid.sein-language-support&ssr=false#overview
+
+install: 
+```
+ext install Fepsid.sein-language-support
+```
