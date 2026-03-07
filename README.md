@@ -101,7 +101,7 @@ int main(void)
     if (name_count > 0)
         printf("First player: %s\n", names[0]);
 
-    sein_free(&config);
+    sein_free(config);
     return 0;
 }
 ```
