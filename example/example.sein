@@ -1,0 +1,58 @@
+@include "defaults.sein"
+
+[App]
+name    = "My Awesome App"
+version = 1.4.2
+author  = John Doe
+
+debug   = true
+verbose = no
+logging = 1
+
+description = "R(Это очень длинное
+    описание приложения
+    которое не влезает в одну строку)R"
+
+tags     = fast; reliable; cross-platform
+log_dirs = /var/log/app; /tmp/app; /home/user/.logs
+
+[Server]
+port        = 9000
+max_clients = 128
+timeout     = 30.5
+retry_delay = 0.25
+
+backoff_times = 0.5; 1.0; 2.0; 4.0; 8.0
+
+allowed_ports = 80; 443; 8080; 8443
+
+[Server.TLS]
+enabled  = true
+cert     = "/etc/ssl/certs/app.crt"
+key      = "/etc/ssl/private/app.key"
+protocols = TLSv1.2; TLSv1.3
+
+[Database]
+host     = localhost
+port     = 5432
+name     = mydb
+user     = admin
+password = "p@ssw0rd!with spaces"
+pool_min = 2
+pool_max = 16
+
+display_name = "Main Production DB"
+
+[Cache]
+enabled  = yes
+ttl      = 3600
+max_size = 512
+nodes    = 192.168.1.10; 192.168.1.11; 192.168.1.12
+
+[ML]
+learning_rate = 0.001
+epochs        = 100
+layers        = 3; 64; 128; 64; 10
+dropout       = 0.1; 0.2; 0.1
+
+model_path = "/models/v2/weights.bin"

@@ -2,7 +2,7 @@
 
 (Используется в FD-SoulEngine)
 
-Очень лёгкий **однофайловый** парсер конфигов в стиле .ini для C++17  
+Очень лёгкий **однофайловый** парсер конфигов в стиле .ini для C++17 и имеется форк под С99 (никто не останется в обиде :3 )
 (расширение `.sein`, но работает с любыми текстовыми файлами)
 
 ## Поддерживает:
@@ -17,7 +17,7 @@
 ## Возможности
 - Без внешних зависимостей
 - Рекурсивное включение файлов (`@include`)
-- Многострочные значения через `\`
+- Многострочные значения через `"R()R"`
 - Распознавание bool без учёта регистра (`true/yes/1`, `false/no/0`)
 - Безопасные значения по умолчанию
 - Разбиение значений в массивы по любому разделителю (по умолчанию `;`)
@@ -29,7 +29,7 @@
 
 # Game settings 
 [Graphics] 
-Resolution = 1920x1080 
+Resolution = "1920x1080" 
 Fullscreen = true
 VSync = yes
 Gamma = 1.1
@@ -40,16 +40,16 @@ MusicVolume = 0.4
 EffectsVolume = 0.7
 
 [Players] 
-Names = Player;Enemy;Devil
+Names = Player; "Enemy"; "Devil"
 
 # Multi-line example 
 [Shaders] 
-vertex = #version 330 core \ 
-		layout(location = 0) in vec3 aPos; \ 
-		void main() { gl_Position = vec4(aPos, 1.0); }
+vertex = "R(#version 330 core
+		layout(location = 0) in vec3 aPos;
+		void main() { gl_Position = vec4(aPos, 1.0); })R"
 ```
 
-## Использование
+## Использование C++
 ```cpp
 #include "sein.h"
 #include <iostream>
@@ -62,7 +62,6 @@ int main(void)
     bool fullscreen = fd::sein::get_bool(config, "Graphics", "Fullscreen", false);
     float gamma = fd::sein::get_float(config, "Graphics", "Gamma", 1.0f);
 
-    // Arrays
     auto names = fd::sein::get_array(config, "Players", "Names");
     auto vols = fd::sein::get_float_array(config, "Audio", "Volumes", ',');
 
@@ -70,6 +69,39 @@ int main(void)
     std::cout << "Fullscreen: " << fullscreen << "\n";
     std::cout << "First player: " << names[0] << "\n";
 
+    return 0;
+}
+```
+
+## Использование C
+```C
+#define SEIN_IMPLEMENTATION
+#include "sein.h"
+#include <stdio.h>
+
+int main(void)
+{
+    SeinConfig config;
+    sein_parse(&config, "config.sein");
+
+    const char *res = sein_get(&config, "Graphics", "Resolution", "1280x720");
+    int fullscreen = sein_get_bool(&config, "Graphics", "Fullscreen", 0);
+    float gamma = sein_get_float(&config, "Graphics", "Gamma", 1.0f);
+
+    char names[32][SEIN_MAX_VAL_LEN];
+    int name_count = sein_get_array(&config, "Players", "Names", ';', names, 32);
+
+    float vols[32];
+    int vol_count = sein_get_float_array(&config, "Audio", "Volumes", ',', vols, 32);
+
+    printf("Resolution: %s\n", res);
+    printf("Fullscreen: %s\n", fullscreen ? "true" : "false");
+    printf("Gamma: %.2f\n", gamma);
+
+    if (name_count > 0)
+        printf("First player: %s\n", names[0]);
+
+    sein_free(&config);
     return 0;
 }
 ```
