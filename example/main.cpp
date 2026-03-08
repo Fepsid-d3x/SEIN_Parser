@@ -7,6 +7,7 @@ int main(void)
 
     // string
     auto name = fd::sein::get_value(cfg, "App",    "name",    "unknown");
+    auto fullname = fd::sein::get_value(cfg, "App", "full_name");
     auto host = fd::sein::get_value(cfg, "Database","host",   "localhost");
 
     auto color_name = fd::sein::get_float_array(cfg, "App", "color_name");
@@ -25,6 +26,7 @@ int main(void)
     auto lr_arr = fd::sein::get_float_array(cfg, "Server", "backoff_times");
 
     std::cout << "App name: " << name << "\n";
+    std::cout << "App full name: " << fullname << "\n";
     std::cout << "App color name(RGBA): r:" << color_name[0] << " g:" << color_name[1] << " b:" << color_name[2] << " a:" << color_name[3] << "\n"; 
     std::cout << "Host: " << host << "\n";
     std::cout << "Port: " << port << "\n";

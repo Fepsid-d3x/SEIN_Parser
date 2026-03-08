@@ -2,9 +2,13 @@
 
 @include "colors.sein"
 
+@set PROJECT_NAME = "My Awesome App"
+@set VERSION = 1.4.2
+
 [App]
-name    = "My Awesome App"
-version = 1.4.2
+name    = ${PROJECT_NAME}
+full_name = ${PROJECT_NAME} v${VERSION}
+version = ${VERSION}
 author  = John Doe
 
 debug   = true

@@ -11,17 +11,19 @@
 (расширение `.sein`, но работает с любыми текстовыми файлами)
 
 ## Поддерживает:
-- секции `[НазваниеСекции]`
-- пары ключ = значение
-- комментарии через `#`
-- многострочные значения с `\` в конце строки
-- директиву `@include "другой.sein"` (рекурсивно, с ограничением глубины)
-- автоматическая обрезка пробелов
-- удобные геттеры: строка, int, float, bool, массивы
+- Секции `[НазваниеСекции]`
+- Пары ключ = значение
+- Комментарии через `#`
+- Многострочные значения с `\` в конце строки
+- Директиву `@include "другой.sein"` (рекурсивно, с ограничением глубины)
+- Автоматическая обрезка пробелов
+- Удобные геттеры: string, int, float, bool, arrays
+- Создание конфигов самим парсером
 
 ## Возможности
 - Без внешних зависимостей
 - Рекурсивное включение файлов (`@include`)
+- Глобальные переменные через (`@set`)
 - Многострочные значения через `"R()R"`
 - Ссылание на другое значение через `${Section.value}`
 - Распознавание bool без учёта регистра (`true/yes/1`, `false/no/0`)
@@ -29,14 +31,26 @@
 - Разбиение значений в массивы по любому разделителю (по умолчанию `;`)
 
 ## Пример файлов (example.sein, colors.sein)
+``` sein
+# colors.sein
+
+[Colors] 
+red = 225; 0; 0; 1 
+green = 0; 225; 0; 1
+```
+
 ```sein
 # example.sein
 
 @include "colors.sein"
 
+@set PROJECT_NAME = "My Awesome App"
+@set VERSION = 1.4.2
+
 [App]
-name    = "My Awesome App"
-version = 1.4.2
+name    = ${PROJECT_NAME}
+full_name = ${PROJECT_NAME} v${VERSION}
+version = ${VERSION}
 author  = John Doe
 
 debug   = true
@@ -92,13 +106,6 @@ layers        = 3; 64; 128; 64; 10
 dropout       = 0.1; 0.2; 0.1
 
 model_path = "/models/v2/weights.bin"
-```
-``` sein
-# colors.sein
-
-[Colors] 
-red = 225; 0; 0; 1 
-green = 0; 225; 0; 1
 ```
 
 ## Использование в C++
@@ -203,6 +210,42 @@ int main(void)
 
     sein_destroy(cfg);
     return 0;
+}
+```
+
+## Создание конфига (C++)
+``` cpp
+#include "../sein.hpp"
+
+int main(void){
+    auto doc = fd::sein::create_new_config("./configCPP.sein");
+
+    fd::sein::add_header_comment(doc, "Auto-generated");
+    fd::sein::add_include(doc, "colors.sein");
+    fd::sein::add_global_var(doc, "APP_NAME", "My App");
+    fd::sein::add_section(doc, "Window");
+    fd::sein::add_value(doc, "Window", "Title", "${APP_NAME}");
+    fd::sein::add_value(doc, "Window", "Width", "1280", "px");
+    fd::sein::save_config(doc);
+}
+```
+
+## Создание конфига (C)
+``` c
+#define SEIN_IMPLEMENTATION
+#include "../sein.h"
+
+int main(void){
+    SeinDocument *doc = sein_doc_alloc("./configC.sein");
+    
+    sein_doc_add_comment(doc, "Auto-generated");
+    sein_doc_add_include(doc, "colors.sein", NULL);
+    sein_doc_add_global_var(doc, "APP_NAME", "My App", NULL);
+    sein_doc_add_section(doc, "Window", NULL);
+    sein_doc_add_value(doc, "Window", "Title", "${APP_NAME}", NULL);
+    sein_doc_add_value(doc, "Window", "Width", "1280", "px");
+    sein_doc_save(doc);
+    sein_doc_free(doc);
 }
 ```
 

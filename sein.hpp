@@ -68,9 +68,11 @@ namespace fd::sein {
 
     inline std::string substitute_value(std::string_view val,
         const std::unordered_map<std::string, std::unordered_map<std::string, std::string>>& config,
+        const std::unordered_map<std::string, std::string>& vars = {},
         int depth = 0)
     {
         if (depth > 8 || val.empty()) return std::string(val);
+        (void)depth;
         
         std::string result;
         result.reserve(val.size() + 64);
@@ -103,8 +105,14 @@ namespace fd::sein {
                         }
                     } else {
                         std::string var_name_str(var_name);
-                        const char *env_val = std::getenv(var_name_str.c_str());
-                        if (env_val) result += env_val;
+                        /// @set variables take priority over environment variables ///
+                        auto v_it = vars.find(var_name_str);
+                        if (v_it != vars.end()) {
+                            result += v_it->second;
+                        } else {
+                            const char *env_val = std::getenv(var_name_str.c_str());
+                            if (env_val) result += env_val;
+                        }
                     }
                     
                     pos = brace_end + 1;
@@ -121,6 +129,7 @@ namespace fd::sein {
 
     inline void parse_file(std::string_view path,
         std::unordered_map<std::string, std::unordered_map<std::string, std::string>>& result,
+        std::unordered_map<std::string, std::string>& vars,
         int depth = 0, bool substitute = true)
     {
         if (depth > 8) {
@@ -156,7 +165,7 @@ namespace fd::sein {
                 if (end_pos != std::string::npos) {
                     raw_val += line.substr(0, end_pos);
                     auto final_val = dedent(raw_val);
-                    result[current_section][raw_key] = substitute ? substitute_value(final_val, result) : final_val;
+                    result[current_section][raw_key] = substitute ? substitute_value(final_val, result, vars) : final_val;
                     raw_key.clear();
                     raw_val.clear();
                     in_raw = false;
@@ -178,7 +187,7 @@ namespace fd::sein {
                 multiline_val.append(stripped.begin(), stripped.end());
                 if (!continues) {
                     auto final_val = strip_quotes(trim_view(multiline_val));
-                    result[current_section][multiline_key] = substitute ? substitute_value(final_val, result) : final_val;
+                    result[current_section][multiline_key] = substitute ? substitute_value(final_val, result, vars) : final_val;
                     multiline_key.clear();
                     multiline_val.clear();
                     in_multiline = false;
@@ -190,12 +199,23 @@ namespace fd::sein {
             auto clean_sv = trim_view(clean_stripped);
             if (clean_sv.empty()) continue;
 
+            if (clean_sv.substr(0, std::min(size_t(4), clean_sv.size())) == "@set") {
+                auto rest = trim_view(clean_sv.substr(4));
+                size_t eq = rest.find('=');
+                if (eq != std::string_view::npos) {
+                    auto var_name = trim(rest.substr(0, eq));
+                    auto var_val  = strip_quotes(trim_view(rest.substr(eq + 1)));
+                    vars[var_name] = substitute ? substitute_value(var_val, result, vars) : var_val;
+                }
+                continue;
+            }
+
             if (clean_sv.substr(0, std::min(size_t(8), clean_sv.size())) == "@include") {
                 auto inc = trim_view(clean_sv.substr(8));
                 inc = strip_quotes_view(inc);
                 std::string inc_path(base_dir);
                 inc_path.append(inc.begin(), inc.end());
-                parse_file(inc_path, result, depth + 1);
+                parse_file(inc_path, result, vars, depth + 1);
                 continue;
             }
 
@@ -215,7 +235,7 @@ namespace fd::sein {
                 size_t end_pos = val_view.find(")R\"", 3);
                 if (end_pos != std::string::npos) {
                     auto raw_str = std::string(val_view.substr(3, end_pos - 3));
-                    result[current_section][key] = substitute ? substitute_value(raw_str, result) : raw_str;
+                    result[current_section][key] = substitute ? substitute_value(raw_str, result, vars) : raw_str;
                 } else {
                     raw_key = key;
                     raw_val.assign(val_view.begin() + 3, val_view.end());
@@ -235,7 +255,7 @@ namespace fd::sein {
 
             auto final_val = strip_quotes_view(val_view);
             auto val_str = std::string(final_val.begin(), final_val.end());
-            result[current_section][key] = substitute ? substitute_value(val_str, result) : val_str;
+            result[current_section][key] = substitute ? substitute_value(val_str, result, vars) : val_str;
         }
     }
 
@@ -247,7 +267,8 @@ namespace fd::sein {
     {
         std::unordered_map<std::string, std::unordered_map<std::string, std::string>> result;
         result.reserve(8);
-        detail::parse_file(path, result);
+        std::unordered_map<std::string, std::string> vars;
+        detail::parse_file(path, result, vars);
         return result;
     }
 
@@ -346,6 +367,307 @@ namespace fd::sein {
             try { result.push_back(std::stoi(t)); } catch (...) { result.push_back(0); }
         }
         return result;
+    }
+
+    ///////////////////////////////////////////////////////////////////////////
+    //                          Writer API                                   //
+    ///////////////////////////////////////////////////////////////////////////
+
+    // Represents a key=value pair inside a section, preserving insertion order ///
+    struct SeinKeyValue {
+        std::string key;
+        std::string value;
+        std::string comment; /// optional inline comment ///
+    };
+
+    // A single [Section] block ///
+    struct SeinSection {
+        std::string               name;
+        std::string               comment;  /// optional comment line above section header///
+        std::vector<SeinKeyValue> entries;
+    };
+
+    /// A top-level directive line (@include / @set / blank / comment) ///
+    struct SeinDirective {
+        enum class Kind { Include, Set, Comment, Blank };
+        Kind        kind    = Kind::Blank;
+        std::string operand; /// path for Include, name for set, text for comment ///
+        std::string value;   /// only used for set ///
+        std::string comment; /// optional inline comment for set / include ///
+    };
+
+    // The main writer document - owns the full file structure ///
+    struct SeinDocument {
+        std::string                path;       /// target file path ///
+        std::vector<SeinDirective> directives; /// @include / @set / comments at top ///
+        std::vector<SeinSection>   sections;
+    };
+
+    /// Construction ///
+
+    inline SeinDocument create_new_config(std::string_view path)
+    {
+        SeinDocument doc;
+        doc.path = std::string(path);
+        return doc;
+    }
+
+    /// Directives ///
+
+    inline void add_include(SeinDocument& doc, std::string_view path,
+                            std::string_view comment = "")
+    {
+        SeinDirective d;
+        d.kind    = SeinDirective::Kind::Include;
+        d.operand = std::string(path);
+        d.comment = std::string(comment);
+        doc.directives.push_back(std::move(d));
+    }
+
+    inline void add_global_var(SeinDocument& doc, std::string_view name,
+                               std::string_view value, std::string_view comment = "")
+    {
+        /// Update existing @set with same name if present ///
+        for (auto& d : doc.directives) {
+            if (d.kind == SeinDirective::Kind::Set && d.operand == name) {
+                d.value   = std::string(value);
+                d.comment = std::string(comment);
+                return;
+            }
+        }
+        SeinDirective d;
+        d.kind    = SeinDirective::Kind::Set;
+        d.operand = std::string(name);
+        d.value   = std::string(value);
+        d.comment = std::string(comment);
+        doc.directives.push_back(std::move(d));
+    }
+
+    inline void add_header_comment(SeinDocument& doc, std::string_view text)
+    {
+        SeinDirective d;
+        d.kind    = SeinDirective::Kind::Comment;
+        d.operand = std::string(text);
+        doc.directives.push_back(std::move(d));
+    }
+
+    inline void add_blank_line(SeinDocument& doc)
+    {
+        doc.directives.push_back({ SeinDirective::Kind::Blank, {}, {}, {} });
+    }
+
+    /// Sections ///
+
+    inline SeinSection* find_section(SeinDocument& doc, std::string_view name)
+    {
+        for (auto& s : doc.sections)
+            if (s.name == name) return &s;
+        return nullptr;
+    }
+
+    inline SeinSection& add_section(SeinDocument& doc, std::string_view name,
+                                    std::string_view comment = "")
+    {
+        auto* existing = find_section(doc, name);
+        if (existing) return *existing;
+        SeinSection sec;
+        sec.name    = std::string(name);
+        sec.comment = std::string(comment);
+        doc.sections.push_back(std::move(sec));
+        return doc.sections.back();
+    }
+
+    inline void remove_section(SeinDocument& doc, std::string_view name)
+    {
+        auto& s = doc.sections;
+        s.erase(std::remove_if(s.begin(), s.end(),
+            [&](const SeinSection& sec){ return sec.name == name; }), s.end());
+    }
+
+    /// key / value ///
+
+    inline void add_value(SeinDocument& doc, std::string_view section,
+                          std::string_view key, std::string_view value,
+                          std::string_view comment = "")
+    {
+        auto& sec = add_section(doc, section);
+        for (auto& kv : sec.entries) {
+            if (kv.key == key) {
+                kv.value   = std::string(value);
+                kv.comment = std::string(comment);
+                return;
+            }
+        }
+        sec.entries.push_back({ std::string(key), std::string(value), std::string(comment) });
+    }
+
+    inline void remove_value(SeinDocument& doc, std::string_view section,
+                             std::string_view key)
+    {
+        auto* sec = find_section(doc, section);
+        if (!sec) return;
+        auto& e = sec->entries;
+        e.erase(std::remove_if(e.begin(), e.end(),
+            [&](const SeinKeyValue& kv){ return kv.key == key; }), e.end());
+    }
+
+    /// Serialization helpers (internal) ///
+
+    namespace detail {
+
+    inline bool needs_quotes(std::string_view v)
+    {
+        if (v.empty()) return true;
+        if (v.front() == ' ' || v.front() == '\t') return true;
+        if (v.back()  == ' ' || v.back()  == '\t') return true;
+        for (char c : v)
+            if (c == '#' || c == '=' || c == ' ' || c == '\t') return true;
+        return false;
+    }
+
+    inline std::string quote_if_needed(std::string_view v)
+    {
+        if (needs_quotes(v)) return '"' + std::string(v) + '"';
+        return std::string(v);
+    }
+
+    inline void write_inline_comment(std::ostream& out, std::string_view c)
+    {
+        if (!c.empty()) out << "  # " << c;
+    }
+
+    }
+
+    /// save_config ///
+
+    inline bool save_config(const SeinDocument& doc, std::string_view path)
+    {
+        std::ofstream f{std::string(path)};
+        if (!f.is_open()) {
+            std::cerr << "[SEIN Writer]: Failed to open for writing: " << path << "\n";
+            return false;
+        }
+
+        for (const auto& d : doc.directives) {
+            switch (d.kind) {
+                case SeinDirective::Kind::Blank:
+                    f << "\n";
+                    break;
+                case SeinDirective::Kind::Comment:
+                    f << "# " << d.operand << "\n";
+                    break;
+                case SeinDirective::Kind::Include:
+                    f << "@include \"" << d.operand << "\"";
+                    detail::write_inline_comment(f, d.comment);
+                    f << "\n";
+                    break;
+                case SeinDirective::Kind::Set:
+                    f << "@set " << d.operand << " = "
+                      << detail::quote_if_needed(d.value);
+                    detail::write_inline_comment(f, d.comment);
+                    f << "\n";
+                    break;
+            }
+        }
+
+        if (!doc.directives.empty() && !doc.sections.empty())
+            f << "\n";
+
+        for (size_t i = 0; i < doc.sections.size(); ++i) {
+            const auto& sec = doc.sections[i];
+            if (!sec.comment.empty())
+                f << "# " << sec.comment << "\n";
+            f << "[" << sec.name << "]\n";
+            for (const auto& kv : sec.entries) {
+                f << kv.key << " = " << detail::quote_if_needed(kv.value);
+                detail::write_inline_comment(f, kv.comment);
+                f << "\n";
+            }
+            if (i + 1 < doc.sections.size())
+                f << "\n";
+        }
+
+        return true;
+    }
+
+    inline bool save_config(const SeinDocument& doc)
+    {
+        return save_config(doc, doc.path);
+    }
+
+    /// ---- load_as_document --------------------------------------------------- ///
+    /// Parses an existing .sein file back into a SeinDocument so it can be       ///
+    /// modified programmatically and re-saved.  Section and key order are fully  ///
+    /// preserved   Top-level blank lines and comments are round-tripped          ///
+
+    inline SeinDocument load_as_document(std::string_view path)
+    {
+        SeinDocument doc;
+        doc.path = std::string(path);
+
+        std::ifstream file{std::string(path)};
+        if (!file.is_open()) {
+            std::cerr << "[SEIN Writer]: Failed to open: " << path << "\n";
+            return doc;
+        }
+
+        std::string current_section;
+        std::string line;
+        bool in_header = true;
+
+        while (std::getline(file, line)) {
+            if (!line.empty() && line.back() == '\r') line.pop_back();
+            auto sv = detail::trim_view(line);
+
+            if (sv.empty()) {
+                if (in_header) add_blank_line(doc);
+                continue;
+            }
+            if (sv.front() == '#') {
+                if (in_header)
+                    add_header_comment(doc, detail::trim_view(sv.substr(1)));
+                continue;
+            }
+            if (sv.size() >= 8 && sv.substr(0, 8) == "@include") {
+                auto inc = std::string(detail::trim_view(sv.substr(8)));
+                if (inc.size() >= 2 && inc.front() == '"' && inc.back() == '"')
+                    inc = inc.substr(1, inc.size() - 2);
+                add_include(doc, inc);
+                continue;
+            }
+            if (sv.size() >= 4 && sv.substr(0, 4) == "@set") {
+                auto rest = detail::trim_view(sv.substr(4));
+                auto eq   = rest.find('=');
+                if (eq != std::string_view::npos) {
+                    auto name = detail::trim(rest.substr(0, eq));
+                    auto val  = detail::trim(rest.substr(eq + 1));
+                    if (val.size() >= 2 && val.front() == '"' && val.back() == '"')
+                        val = val.substr(1, val.size() - 2);
+                    add_global_var(doc, name, val);
+                }
+                continue;
+            }
+            if (sv.front() == '[' && sv.back() == ']') {
+                in_header = false;
+                current_section = detail::trim(sv.substr(1, sv.size() - 2));
+                add_section(doc, current_section);
+                continue;
+            }
+            auto eq = sv.find('=');
+            if (eq != std::string_view::npos && !current_section.empty()) {
+                auto key = detail::trim(sv.substr(0, eq));
+                auto val = detail::trim(sv.substr(eq + 1));
+                /// strip inline comment ///
+                auto hash = val.find('#');
+                if (hash != std::string::npos)
+                    val = detail::trim(val.substr(0, hash));
+                if (val.size() >= 2 && val.front() == '"' && val.back() == '"')
+                    val = val.substr(1, val.size() - 2);
+                add_value(doc, current_section, key, val);
+            }
+        }
+
+        return doc;
     }
 
 }

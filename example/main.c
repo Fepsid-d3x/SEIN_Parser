@@ -10,6 +10,7 @@ int main(void)
 
     /// string ///
     const char *name = sein_get(cfg, "App",      "name",    "unknown");
+    const char *fullname = sein_get(cfg, "App", "full_name", "unknown");
     const char *host = sein_get(cfg, "Database", "host",    "localhost");
 
     /// int / float ///
@@ -37,6 +38,7 @@ int main(void)
     int   lr_count = sein_get_float_array(cfg, "Server", "backoff_times", ';', lr_arr, 32);
 
     printf("App name: %s\n", name);
+    printf("App full name: %s\n", fullname);
     printf("App color name(RGBA): r:%.4f g:%.4f b:%.4f a:%.4f\n",
         color_count > 0 ? color_name[0] : 0.f,
         color_count > 1 ? color_name[1] : 0.f,

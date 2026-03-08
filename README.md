@@ -18,10 +18,12 @@ A very lightweight **single-file** .ini-style config parser for C++17, with a C9
 - `@include "other.sein"` directive (recursive, with depth limit)
 - Automatic whitespace trimming
 - Convenient getters: string, int, float, bool, arrays
+- Creating configs by the parser itself
 
 ## Features
 - No external dependencies
 - Recursive file inclusion (`@include`)
+- Global variables through (`@set`)
 - Multi-line values via `"R()R"`
 - Referencing another value via `${Section.value}`
 - Case-insensitive bool recognition (`true/yes/1`, `false/no/0`)
@@ -29,14 +31,26 @@ A very lightweight **single-file** .ini-style config parser for C++17, with a C9
 - Value splitting into arrays by any delimiter (default `;`)
 
 ## Example file (example.sein, colors.sein)
+``` sein
+# colors.sein
+
+[Colors] 
+red = 225; 0; 0; 1 
+green = 0; 225; 0; 1
+```
+
 ```sein
 # example.sein
 
 @include "colors.sein"
 
+@set PROJECT_NAME = "My Awesome App"
+@set VERSION = 1.4.2
+
 [App]
-name    = "My Awesome App"
-version = 1.4.2
+name    = ${PROJECT_NAME}
+full_name = ${PROJECT_NAME} v${VERSION}
+version = ${VERSION}
 author  = John Doe
 
 debug   = true
@@ -93,13 +107,6 @@ dropout       = 0.1; 0.2; 0.1
 
 model_path = "/models/v2/weights.bin"
 ```
-``` sein
-# colors.sein
-
-[Colors] 
-red = 225; 0; 0; 1 
-green = 0; 225; 0; 1
-```
 
 ## C++ Usage
 ```cpp
@@ -146,7 +153,7 @@ int main(void)
 ```
 
 ## C Usage
-```C
+``` c
 #define SEIN_IMPLEMENTATION
 #include "../sein.h"
 #include <stdio.h>
@@ -206,6 +213,41 @@ int main(void)
 }
 ```
 
+## Create config (C++)
+``` cpp
+#include "../sein.hpp"
+
+int main(void){
+    auto doc = fd::sein::create_new_config("./configCPP.sein");
+
+    fd::sein::add_header_comment(doc, "Auto-generated");
+    fd::sein::add_include(doc, "colors.sein");
+    fd::sein::add_global_var(doc, "APP_NAME", "My App");
+    fd::sein::add_section(doc, "Window");
+    fd::sein::add_value(doc, "Window", "Title", "${APP_NAME}");
+    fd::sein::add_value(doc, "Window", "Width", "1280", "px");
+    fd::sein::save_config(doc);
+}
+```
+
+## Create config (C)
+``` c
+#define SEIN_IMPLEMENTATION
+#include "../sein.h"
+
+int main(void){
+    SeinDocument *doc = sein_doc_alloc("./configC.sein");
+    
+    sein_doc_add_comment(doc, "Auto-generated");
+    sein_doc_add_include(doc, "colors.sein", NULL);
+    sein_doc_add_global_var(doc, "APP_NAME", "My App", NULL);
+    sein_doc_add_section(doc, "Window", NULL);
+    sein_doc_add_value(doc, "Window", "Title", "${APP_NAME}", NULL);
+    sein_doc_add_value(doc, "Window", "Width", "1280", "px");
+    sein_doc_save(doc);
+    sein_doc_free(doc);
+}
+```
 **VSCode Extension**
 
 Install:
