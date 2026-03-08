@@ -1,5 +1,9 @@
 # SEIN_Parser
 
+---
+![VS Marketplace](https://img.shields.io/badge/Install%20from-VS%20Marketplace-blue?logo=visualstudiocode)
+---
+
 (Используется в FD-SoulEngine)
 
 Очень лёгкий **однофайловый** парсер конфигов в стиле .ini для C++17 и имеется форк под С99 (никто не останется в обиде :3 )
