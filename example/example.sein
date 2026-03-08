@@ -1,4 +1,6 @@
-@include "defaults.sein"
+# example.sein
+
+@include "colors.sein"
 
 [App]
 name    = "My Awesome App"
@@ -15,6 +17,8 @@ description = "R(Это очень длинное
 
 tags     = fast; reliable; cross-platform
 log_dirs = /var/log/app; /tmp/app; /home/user/.logs
+
+color_name = ${Colors.red}
 
 [Server]
 port        = 9000
