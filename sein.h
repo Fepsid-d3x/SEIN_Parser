@@ -94,9 +94,15 @@ static void sein__strip_comment(char *line)
     if (p) *p = '\0';
 }
 
+static size_t sein__strlen_safe(const char *s)
+{
+    return s ? strlen(s) : 0;
+}
+
 static char *sein__strip_quotes(char *val)
 {
-    size_t len = strlen(val);
+    if (!val) return val;
+    size_t len = sein__strlen_safe(val);
     if (len >= 2 && val[0] == '"' && val[len - 1] == '"') {
         val[len - 1] = '\0';
         return val + 1;
@@ -123,11 +129,18 @@ static SeinSection *sein__get_or_create_section(SeinConfig *cfg, const char *nam
 
 static void sein__set(SeinSection *sec, const char *key, const char *val)
 {
-    /// update existing key ///
+    size_t key_len = key ? strlen(key) : 0;
+    size_t val_len = val ? strlen(val) : 0;
+    
+    /// update existing key (optimize with early termination) ///
     for (int i = 0; i < sec->entry_count; ++i) {
-        if (strcmp(sec->entries[i].key, key) == 0) {
-            strncpy(sec->entries[i].val, val, SEIN_MAX_VAL_LEN - 1);
-            sec->entries[i].val[SEIN_MAX_VAL_LEN - 1] = '\0';
+        if (key_len == strlen(sec->entries[i].key) && strcmp(sec->entries[i].key, key) == 0) {
+            if (val_len < SEIN_MAX_VAL_LEN) {
+                memcpy(sec->entries[i].val, val, val_len + 1);
+            } else {
+                memcpy(sec->entries[i].val, val, SEIN_MAX_VAL_LEN - 1);
+                sec->entries[i].val[SEIN_MAX_VAL_LEN - 1] = '\0';
+            }
             return;
         }
     }
@@ -137,10 +150,62 @@ static void sein__set(SeinSection *sec, const char *key, const char *val)
         return;
     }
     SeinEntry *e = &sec->entries[sec->entry_count++];
-    strncpy(e->key, key, SEIN_MAX_KEY_LEN - 1);
-    e->key[SEIN_MAX_KEY_LEN - 1] = '\0';
-    strncpy(e->val, val, SEIN_MAX_VAL_LEN - 1);
-    e->val[SEIN_MAX_VAL_LEN - 1] = '\0';
+    size_t copy_key_len = key_len < SEIN_MAX_KEY_LEN ? key_len + 1 : SEIN_MAX_KEY_LEN;
+    memcpy(e->key, key, copy_key_len - 1);
+    e->key[copy_key_len - 1] = '\0';
+    size_t copy_val_len = val_len < SEIN_MAX_VAL_LEN ? val_len + 1 : SEIN_MAX_VAL_LEN;
+    memcpy(e->val, val, copy_val_len - 1);
+    e->val[copy_val_len - 1] = '\0';
+}
+
+static void sein__substitute_value(char *val, const SeinConfig *cfg)
+{
+    if (!val || *val == '\0') return;
+    char temp[SEIN_MAX_VAL_LEN];
+    size_t src = 0, dst = 0;
+    
+    while (src < strlen(val) && dst < SEIN_MAX_VAL_LEN - 1) {
+        if (val[src] == '$' && src + 1 < strlen(val) && val[src + 1] == '{') {
+            char *brace_end = strchr(val + src + 2, '}');
+            if (brace_end) {
+                size_t var_len = (size_t)(brace_end - (val + src + 2));
+                char var_name[256];
+                if (var_len < sizeof(var_name)) {
+                    memcpy(var_name, val + src + 2, var_len);
+                    var_name[var_len] = '\0';
+                    
+                    char *dot = strchr(var_name, '.');
+                    if (dot) {
+                        *dot = '\0';
+                        const char *val_ref = sein_get(cfg, var_name, dot + 1, NULL);
+                        if (val_ref) {
+                            size_t val_len = strlen(val_ref);
+                            if (dst + val_len < SEIN_MAX_VAL_LEN) {
+                                memcpy(temp + dst, val_ref, val_len);
+                                dst += val_len;
+                            }
+                        }
+                    } else {
+                        const char *env_val = getenv(var_name);
+                        if (env_val) {
+                            size_t env_len = strlen(env_val);
+                            if (dst + env_len < SEIN_MAX_VAL_LEN) {
+                                memcpy(temp + dst, env_val, env_len);
+                                dst += env_len;
+                            }
+                        }
+                    }
+                    src = (size_t)(brace_end - val) + 1;
+                    continue;
+                }
+            }
+        }
+        if (dst < SEIN_MAX_VAL_LEN - 1) temp[dst++] = val[src];
+        src++;
+    }
+    temp[dst] = '\0';
+    strncpy(val, temp, SEIN_MAX_VAL_LEN - 1);
+    val[SEIN_MAX_VAL_LEN - 1] = '\0';
 }
 
 static void sein__parse_file(SeinConfig *cfg, const char *path, int depth);
@@ -197,7 +262,10 @@ static void sein__parse_file(SeinConfig *cfg, const char *path, int depth)
                 strncat(raw_val, line, SEIN_MAX_VAL_LEN - cur - 1);
 
                 SeinSection *sec = sein__get_or_create_section(cfg, current_section);
-                if (sec) sein__set(sec, raw_key, raw_val);
+                if (sec) {
+                    sein__substitute_value(raw_val, cfg);
+                    sein__set(sec, raw_key, raw_val);
+                }
 
                 raw_key[0] = raw_val[0] = '\0';
                 in_raw = 0;
@@ -232,6 +300,7 @@ static void sein__parse_file(SeinConfig *cfg, const char *path, int depth)
                 SeinSection *sec = sein__get_or_create_section(cfg, current_section);
                 if (sec) {
                     char *v = sein__strip_quotes(sein__trim_inplace(ml_val));
+                    sein__substitute_value(v, cfg);
                     sein__set(sec, ml_key, v);
                 }
                 ml_key[0] = ml_val[0] = '\0';
@@ -278,7 +347,13 @@ static void sein__parse_file(SeinConfig *cfg, const char *path, int depth)
             if (end_pos) {
                 *end_pos = '\0';
                 SeinSection *sec = sein__get_or_create_section(cfg, current_section);
-                if (sec) sein__set(sec, key, val + 3);
+                if (sec) {
+                    char temp[SEIN_MAX_VAL_LEN];
+                    strncpy(temp, val + 3, SEIN_MAX_VAL_LEN - 1);
+                    temp[SEIN_MAX_VAL_LEN - 1] = '\0';
+                    sein__substitute_value(temp, cfg);
+                    sein__set(sec, key, temp);
+                }
             } else {
                 strncpy(raw_key, key, SEIN_MAX_KEY_LEN - 1);
                 raw_key[SEIN_MAX_KEY_LEN - 1] = '\0';
@@ -305,6 +380,7 @@ static void sein__parse_file(SeinConfig *cfg, const char *path, int depth)
         SeinSection *sec = sein__get_or_create_section(cfg, current_section);
         if (sec) {
             char *v = sein__strip_quotes(val);
+            sein__substitute_value(v, cfg);
             sein__set(sec, key, v);
         }
     }
@@ -393,6 +469,7 @@ int sein_get_bool(const SeinConfig *cfg, const char *section,
 static int sein__split(const char *val, char delim,
                        char out[][SEIN_MAX_VAL_LEN], int max_out)
 {
+    if (!val) return 0;
     int count = 0;
     const char *p = val;
 
@@ -401,14 +478,19 @@ static int sein__split(const char *val, char delim,
         while (*q && *q != delim) ++q;
 
         size_t len = (size_t)(q - p);
-        if (len >= SEIN_MAX_VAL_LEN) len = SEIN_MAX_VAL_LEN - 1;
-        memcpy(out[count], p, len);
-        out[count][len] = '\0';
+        if (len > SEIN_MAX_VAL_LEN - 1) len = SEIN_MAX_VAL_LEN - 1;
+        if (len > 0) {
+            memcpy(out[count], p, len);
+            out[count][len] = '\0';
 
-        char *tok = sein__trim_inplace(out[count]);
-        if (tok != out[count]) memmove(out[count], tok, strlen(tok) + 1);
+            char *tok = sein__trim_inplace(out[count]);
+            if (tok != out[count]) {
+                size_t tok_len = strlen(tok);
+                memmove(out[count], tok, tok_len + 1);
+            }
 
-        if (out[count][0] != '\0') ++count;
+            if (out[count][0] != '\0') ++count;
+        }
 
         if (*q == '\0') break;
         p = q + 1;

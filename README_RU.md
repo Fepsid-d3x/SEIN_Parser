@@ -18,90 +18,185 @@
 - Без внешних зависимостей
 - Рекурсивное включение файлов (`@include`)
 - Многострочные значения через `"R()R"`
+- Ссылание на другое значение через `${Section.value}`
 - Распознавание bool без учёта регистра (`true/yes/1`, `false/no/0`)
 - Безопасные значения по умолчанию
 - Разбиение значений в массивы по любому разделителю (по умолчанию `;`)
 
-## Пример файла (config.sein)
+## Пример файлов (example.sein, colors.sein)
 ```sein
-@include "paths.sein" 
+# example.sein
+
 @include "colors.sein"
 
-# Game settings 
-[Graphics] 
-Resolution = "1920x1080" 
-Fullscreen = true
-VSync = yes
-Gamma = 1.1
+[App]
+name    = "My Awesome App"
+version = 1.4.2
+author  = John Doe
 
-[Audio] 
-MasterVolume = 0.85 
-MusicVolume = 0.4 
-EffectsVolume = 0.7
+debug   = true
+verbose = no
+logging = 1
 
-[Players] 
-Names = Player; "Enemy"; "Devil"
+description = "R(Это очень длинное
+    описание приложения
+    которое не влезает в одну строку)R"
 
-# Multi-line example 
-[Shaders] 
-vertex = "R(#version 330 core
-		layout(location = 0) in vec3 aPos;
-		void main() { gl_Position = vec4(aPos, 1.0); })R"
+tags     = fast; reliable; cross-platform
+log_dirs = /var/log/app; /tmp/app; /home/user/.logs
+
+color_name = ${Colors.red}
+
+[Server]
+port        = 9000
+max_clients = 128
+timeout     = 30.5
+retry_delay = 0.25
+
+backoff_times = 0.5; 1.0; 2.0; 4.0; 8.0
+
+allowed_ports = 80; 443; 8080; 8443
+
+[Server.TLS]
+enabled  = true
+cert     = "/etc/ssl/certs/app.crt"
+key      = "/etc/ssl/private/app.key"
+protocols = TLSv1.2; TLSv1.3
+
+[Database]
+host     = localhost
+port     = 5432
+name     = mydb
+user     = admin
+password = "p@ssw0rd!with spaces"
+pool_min = 2
+pool_max = 16
+
+display_name = "Main Production DB"
+
+[Cache]
+enabled  = yes
+ttl      = 3600
+max_size = 512
+nodes    = 192.168.1.10; 192.168.1.11; 192.168.1.12
+
+[ML]
+learning_rate = 0.001
+epochs        = 100
+layers        = 3; 64; 128; 64; 10
+dropout       = 0.1; 0.2; 0.1
+
+model_path = "/models/v2/weights.bin"
+```
+``` sein
+# colors.sein
+
+[Colors] 
+red = 225; 0; 0; 1 
+green = 0; 225; 0; 1
 ```
 
-## Использование C++
+## Использование в C++
 ```cpp
-#include "sein.h"
+#include "sein.hpp"
 #include <iostream>
 
 int main(void)
 {
-    auto config = fd::sein::parse_sein("config.sein");
+    auto cfg = fd::sein::parse_sein("example.sein");
 
-    std::string res = fd::sein::get_value(config, "Graphics", "Resolution", "1280x720");
-    bool fullscreen = fd::sein::get_bool(config, "Graphics", "Fullscreen", false);
-    float gamma = fd::sein::get_float(config, "Graphics", "Gamma", 1.0f);
+    // string
+    auto name = fd::sein::get_value(cfg, "App",    "name",    "unknown");
+    auto host = fd::sein::get_value(cfg, "Database","host",   "localhost");
 
-    auto names = fd::sein::get_array(config, "Players", "Names");
-    auto vols = fd::sein::get_float_array(config, "Audio", "Volumes", ',');
+    auto color_name = fd::sein::get_float_array(cfg, "App", "color_name");
 
-    std::cout << "Resolution: " << res << "\n";
-    std::cout << "Fullscreen: " << fullscreen << "\n";
-    std::cout << "First player: " << names[0] << "\n";
+    // int
+    int   port    = fd::sein::get_int  (cfg, "Server", "port",    8080);
+    float timeout = fd::sein::get_float(cfg, "Server", "timeout", 30.f);
+
+    // bool
+    bool debug = fd::sein::get_bool(cfg, "App",      "debug",   false);
+    bool tls   = fd::sein::get_bool(cfg, "Server.TLS","enabled", false);
+
+    auto tags   = fd::sein::get_array      (cfg, "App",    "tags");
+    auto ports  = fd::sein::get_int_array  (cfg, "Server", "allowed_ports");
+    auto layers = fd::sein::get_int_array  (cfg, "ML",     "layers");
+    auto lr_arr = fd::sein::get_float_array(cfg, "Server", "backoff_times");
+
+    std::cout << "App name: " << name << "\n";
+    std::cout << "App color name(RGBA): r:" << color_name[0] << " g:" << color_name[1] << " b:" << color_name[2] << " a:" << color_name[3] << "\n"; 
+    std::cout << "Host: " << host << "\n";
+    std::cout << "Port: " << port << "\n";
+    std::cout << "Timeout: " << timeout << "\n";
+    std::cout << "Debug: " << debug << "\n";
+    std::cout << "TLS: " << tls << "\n";
+    std::cout << "Tags: " << tags[0] << "\n";
+    std::cout << "Ports: " << ports[0] << "\n";
+    std::cout << "Layers: " << layers[0] << "\n";
+    std::cout << "lr arr: " << lr_arr[0] << "\n";
 
     return 0;
 }
 ```
 
-## Использование C
+## Использование в C
 ```C
 #define SEIN_IMPLEMENTATION
-#include "sein.h"
+#include "../sein.h"
 #include <stdio.h>
 
 int main(void)
 {
-    SeinConfig *config = sein_alloc();
-    sein_parse(config, "config.sein");
+    SeinConfig *cfg = sein_alloc();
+    if (!cfg) return 1;
+    sein_parse(cfg, "example.sein");
 
-    const char *res = sein_get(config, "Graphics", "Resolution", "1280x720");
-    int fullscreen = sein_get_bool(config, "Graphics", "Fullscreen", 0);
-    float gamma = sein_get_float(config, "Graphics", "Gamma", 1.0f);
+    /// string ///
+    const char *name = sein_get(cfg, "App",      "name",    "unknown");
+    const char *host = sein_get(cfg, "Database", "host",    "localhost");
 
-    char names[32][SEIN_MAX_VAL_LEN];
-    int name_count = sein_get_array(config, "Players", "Names", ';', names, 32);
+    /// int / float ///
+    int   port    = sein_get_int  (cfg, "Server", "port",    8080);
+    float timeout = sein_get_float(cfg, "Server", "timeout", 30.f);
 
-    float vols[32];
-    int vol_count = sein_get_float_array(config, "Audio", "Volumes", ',', vols, 32);
+    /// bool ///
+    int debug = sein_get_bool(cfg, "App",       "debug",   0);
+    int tls   = sein_get_bool(cfg, "Server.TLS","enabled", 0);
 
-    printf("Resolution: %s\n", res);
-    printf("Fullscreen: %s\n", fullscreen ? "true" : "false");
-    printf("Gamma: %.2f\n", gamma);
+    /// arrays //
+    float color_name[4];
+    int   color_count = sein_get_float_array(cfg, "App", "color_name", ';', color_name, 4);
 
-    if (name_count > 0)
-        printf("First player: %s\n", names[0]);
+    char tags[32][SEIN_MAX_VAL_LEN];
+    int  tag_count = sein_get_array(cfg, "App", "tags", ';', tags, 32);
 
-    sein_free(config);
+    int ports[32];
+    int port_count = sein_get_int_array(cfg, "Server", "allowed_ports", ';', ports, 32);
+
+    int layers[32];
+    int layer_count = sein_get_int_array(cfg, "ML", "layers", ';', layers, 32);
+
+    float lr_arr[32];
+    int   lr_count = sein_get_float_array(cfg, "Server", "backoff_times", ';', lr_arr, 32);
+
+    printf("App name: %s\n", name);
+    printf("App color name(RGBA): r:%.4f g:%.4f b:%.4f a:%.4f\n",
+        color_count > 0 ? color_name[0] : 0.f,
+        color_count > 1 ? color_name[1] : 0.f,
+        color_count > 2 ? color_name[2] : 0.f,
+        color_count > 3 ? color_name[3] : 0.f);
+    printf("Host:     %s\n",  host);
+    printf("Port:     %d\n",  port);
+    printf("Timeout:  %.2f\n",timeout);
+    printf("Debug:    %s\n",  debug ? "true" : "false");
+    printf("TLS:      %s\n",  tls   ? "true" : "false");
+    if (tag_count   > 0) printf("Tags:     %s\n",   tags[0]);
+    if (port_count  > 0) printf("Ports:    %d\n",   ports[0]);
+    if (layer_count > 0) printf("Layers:   %d\n",   layers[0]);
+    if (lr_count    > 0) printf("lr arr:   %.4f\n", lr_arr[0]);
+
+    sein_destroy(cfg);
     return 0;
 }
 ```
