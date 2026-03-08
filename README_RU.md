@@ -1,7 +1,8 @@
 # SEIN_Parser
 
 ---
-![VS Marketplace](https://img.shields.io/badge/Install%20from-VS%20Marketplace-blue?logo=visualstudiocode)
+![VS Marketplace](https://img.shields.io/badge/Install%20from-VS%20Marketplace-blue?logo=visualstudiocode) ![C++](https://img.shields.io/badge/C++-17-blue) ![C++](https://img.shields.io/badge/C-99-blue)
+ 
 ---
 
 (Используется в FD-SoulEngine)
