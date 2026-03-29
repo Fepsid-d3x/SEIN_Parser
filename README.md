@@ -225,6 +225,51 @@ Import: `import sein`
 
 ---
 
+## Comparison with other formats
+
+| Feature | SEIN | INI | TOML | YAML | HCL | HOCON |
+|---|:---:|:---:|:---:|:---:|:---:|:---:|
+| Single-header, no deps | ✓ | ✓ | ✗ | ✗ | ✗ | ✗ |
+| mmap + zero-copy read | ✓ | ✗ | ✗ | ✗ | ✗ | ✗ |
+| Async parsing | ✓ | ✗ | ✗ | ✗ | ✗ | ✗ |
+| Variable substitution | ✓ | ✗ | ✗ | ~ (anchors) | ✓ | ✓ |
+| OS env variable access | ✓ (`${SYSENV:VAR}`) | ✗ | ✗ | ✗ | ✓ | ✓ |
+| Section inheritance | ✓ | ✗ | ✗ | ✗ | ✗ | ~ |
+| `@include` directive | ✓ | ✗ | ✗ | ✗ | ✓ | ✓ |
+| Arrays | ✓ | ✗ | ✓ | ✓ | ✓ | ✓ |
+| Multiline strings | ✓ | ✗ | ✓ | ✓ | ✓ | ✓ |
+| Native datetime type | ✗ | ✗ | ✓ | ✓ | ✓ | ✓ |
+| Nested structures | ~ (dot sections) | ✗ | ✓ | ✓ | ✓ | ✓ |
+| JSON/schema validation | ✗ | ✗ | ✗ | ~ | ✓ | ~ |
+| Spec complexity | low | minimal | moderate | very high | high | high |
+| C/C++ native support | ✓ | ~ | ~ (toml++) | ✗ | ✗ | ✗ |
+| Python native support | ✓ | ~ | ~ | ✗ | ✗ | ✗ |
+
+**Parsing speed** (rough order, fastest → slowest for typical game/app configs):
+
+`INI ≈ SEIN > TOML > HCL > YAML > HOCON`
+
+SEIN matches INI-level speed on small files and pulls ahead on large files thanks to mmap - the OS maps the file into memory without an extra kernel copy. All other formats above require at least one full read-into-buffer pass.
+
+---
+
+### Where SEIN wins
+
+- **No dependencies** - drop in one `.h` / `.hpp` / `.py` file, done
+- **Fastest cold-start** - mmap avoids the kernel read-copy; background thread (`usage_async`) means the rest of your app initialises in parallel
+- **Inheritance** - `[Child : [Parent]]` lets you define entity templates without duplicating keys (unique among the formats listed)
+- **`@include`** - split large configs across multiple files without any library support
+- **`${SYSENV:VAR}`** - explicit OS-env access that never collides with your `@set` variables
+- **C + C++ + Python from one codebase** - single source of truth for the parser logic
+
+### Where SEIN loses
+
+- **No native datetime type** - use a string and parse it yourself (TOML/HCL/YAML have first-class date/time)
+- **No true nesting** - deep object graphs are awkward (YAML/TOML/HCL handle them natively)
+- **No schema validation** - there is no built-in way to enforce types or required keys
+
+---
+
 **VSCode Extension**
 
 ```
