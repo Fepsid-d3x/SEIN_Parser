@@ -1,41 +1,49 @@
 # SEIN_Parser
 
 ---
-![VS Marketplace](https://img.shields.io/badge/Install%20from-VS%20Marketplace-blue?logo=visualstudiocode) ![C++](https://img.shields.io/badge/C++-17-blue) ![C++](https://img.shields.io/badge/C-99-blue) ![Python](https://img.shields.io/badge/Python-yellow)
- 
+![VS Marketplace](https://img.shields.io/badge/Install%20from-VS%20Marketplace-blue?logo=visualstudiocode) ![C++](https://img.shields.io/badge/C++-17-blue) ![C](https://img.shields.io/badge/C-11-blue) ![Python](https://img.shields.io/badge/Python-3.8+-yellow)
+
 ---
 
 (Used in FD-SoulEngine)
 
-A very lightweight **single-file** .ini-style config parser for C++17 / C99 / Python (no one gets left out :3 )
+A very lightweight **single-file** .ini-style config parser for C++17 / C11 / Python.
 (`.sein` extension, but works with any text file)
 
-## Supports:
+## Supports
 - Sections `[SectionName]`
 - Key = value pairs
 - Comments via `#`
 - Multi-line values with `\` at the end of a line
+- Raw multi-line strings `"R( ... )R"`
 - `@include "other.sein"` directive (recursive, with depth limit)
+- `@set VAR = value` global variables
+- Referencing values via `${Section.key}` or `${VAR}`
+- **System env variables via `${SYSENV:VAR}`** — always reads from the OS, never from `@set`
+- **Section inheritance** `[Child : [Parent]]`
+- **Async parsing** — `usage_async` flag in `parse_sein` / `create_new_config`
 - Automatic whitespace trimming
-- Convenient getters: string, int, float, bool, arrays
-- Creating configs by the parser itself
+- Getters: string, int, float, bool, arrays
+- Writer API for creating and editing configs programmatically
 
 ## Features
 - No external dependencies
-- Recursive file inclusion (`@include`)
-- Global variables through (`@set`)
-- Multi-line values via `"R()R"`
-- Referencing another value via `${Section.value}`
+- mmap-based file reading (POSIX & Windows) — zero extra copy into kernel cache
+- Lock-free hot paths in C (`_Atomic` counts, acquire/release ordering)
+- `std::from_chars` in C++ — no allocations, no exceptions for number parsing
+- Background thread parsing (pthreads / `std::thread` / Python `threading`)
 - Case-insensitive bool recognition (`true/yes/1`, `false/no/0`)
-- Safe default values
-- Value splitting into arrays by any delimiter (default `;`)
+- Safe default values on all getters
 
-## Example file (example.sein, colors.sein)
-``` sein
+---
+
+## Example config files
+
+```sein
 # colors.sein
 
-[Colors] 
-red = 225; 0; 0; 1 
+[Colors]
+red   = 225; 0; 0; 1
 green = 0; 225; 0; 1
 ```
 
@@ -45,268 +53,180 @@ green = 0; 225; 0; 1
 @include "colors.sein"
 
 @set PROJECT_NAME = "My Awesome App"
-@set VERSION = 1.4.2
+@set VERSION      = 1.4.2
 
 [App]
-name    = ${PROJECT_NAME}
+name      = ${PROJECT_NAME}
 full_name = ${PROJECT_NAME} v${VERSION}
-version = ${VERSION}
-author  = John Doe
+author    = John Doe
+debug     = true
 
-debug   = true
-verbose = no
-logging = 1
-
-description = "R(Это очень длинное
-    описание приложения
-    которое не влезает в одну строку)R"
-
-tags     = fast; reliable; cross-platform
-log_dirs = /var/log/app; /tmp/app; /home/user/.logs
+# ${SYSENV:HOME} always reads from the OS environment - never from @set
+home_dir  = ${SYSENV:HOME}
 
 color_name = ${Colors.red}
 
 [Server]
-port        = 9000
-max_clients = 128
-timeout     = 30.5
-retry_delay = 0.25
-
+port          = 9000
+timeout       = 30.5
 backoff_times = 0.5; 1.0; 2.0; 4.0; 8.0
 
-allowed_ports = 80; 443; 8080; 8443
+# Section inheritance 
+[Character]
+name   = none
+health = 100
+speed  = 5.0
+level  = 1
 
-[Server.TLS]
-enabled  = true
-cert     = "/etc/ssl/certs/app.crt"
-key      = "/etc/ssl/private/app.key"
-protocols = TLSv1.2; TLSv1.3
+# Player inherits health/level from Character; overrides name and speed
+[Player : [Character]]
+name  = Hero
+speed = 8.5
 
-[Database]
-host     = localhost
-port     = 5432
-name     = mydb
-user     = admin
-password = "p@ssw0rd!with spaces"
-pool_min = 2
-pool_max = 16
-
-display_name = "Main Production DB"
-
-[Cache]
-enabled  = yes
-ttl      = 3600
-max_size = 512
-nodes    = 192.168.1.10; 192.168.1.11; 192.168.1.12
-
-[ML]
-learning_rate = 0.001
-epochs        = 100
-layers        = 3; 64; 128; 64; 10
-dropout       = 0.1; 0.2; 0.1
-
-model_path = "/models/v2/weights.bin"
+# Enemy also inherits from Character
+[Enemy : [Character]]
+name   = Goblin
+health = 40
 ```
 
-## C++ Usage
-```cpp
-#include "sein.hpp"
-#include <iostream>
+---
 
-int main(void)
-{
-    auto cfg = fd::sein::parse_sein("example.sein");
+## C++ API
 
-    // string
-    auto name = fd::sein::get_value(cfg, "App",    "name",    "unknown");
-    auto host = fd::sein::get_value(cfg, "Database","host",   "localhost");
+Include: `#include "sein.hpp"`  
+Compile: `-std=c++17`
 
-    auto color_name = fd::sein::get_float_array(cfg, "App", "color_name");
+**Parse**
 
-    // int
-    int   port    = fd::sein::get_int  (cfg, "Server", "port",    8080);
-    float timeout = fd::sein::get_float(cfg, "Server", "timeout", 30.f);
+| Function | Returns | Notes |
+|---|---|---|
+| `fd::sein::parse_sein(path, usage_async=false)` | `SeinResult` | Sync or async parse |
+| `result.data` | `Config` | The parsed config map |
+| `result.wait()` | — | Block until async parse finishes |
+| `result.done()` | `bool` | Check if async parse is complete |
 
-    // bool
-    bool debug = fd::sein::get_bool(cfg, "App",      "debug",   false);
-    bool tls   = fd::sein::get_bool(cfg, "Server.TLS","enabled", false);
+**Getters** (`cfg` = `result.data`)
 
-    auto tags   = fd::sein::get_array      (cfg, "App",    "tags");
-    auto ports  = fd::sein::get_int_array  (cfg, "Server", "allowed_ports");
-    auto layers = fd::sein::get_int_array  (cfg, "ML",     "layers");
-    auto lr_arr = fd::sein::get_float_array(cfg, "Server", "backoff_times");
+| Function | Returns |
+|---|---|
+| `get_value(cfg, section, key, default)` | `std::string` |
+| `get_int(cfg, section, key, default)` | `int` |
+| `get_float(cfg, section, key, default)` | `float` |
+| `get_bool(cfg, section, key, default)` | `bool` |
+| `get_array(cfg, section, key)` | `vector<string>` |
+| `get_int_array(cfg, section, key)` | `vector<int>` |
+| `get_float_array(cfg, section, key)` | `vector<float>` |
 
-    std::cout << "App name: " << name << "\n";
-    std::cout << "App color name(RGBA): r:" << color_name[0] << " g:" << color_name[1] << " b:" << color_name[2] << " a:" << color_name[3] << "\n"; 
-    std::cout << "Host: " << host << "\n";
-    std::cout << "Port: " << port << "\n";
-    std::cout << "Timeout: " << timeout << "\n";
-    std::cout << "Debug: " << debug << "\n";
-    std::cout << "TLS: " << tls << "\n";
-    std::cout << "Tags: " << tags[0] << "\n";
-    std::cout << "Ports: " << ports[0] << "\n";
-    std::cout << "Layers: " << layers[0] << "\n";
-    std::cout << "lr arr: " << lr_arr[0] << "\n";
+**Writer** (all prefixed with `doc_`)
 
-    return 0;
-}
-```
+| Function | Description |
+|---|---|
+| `doc_create_new_config(path, async=false)` | Create new document |
+| `doc_add_header_comment(doc, text)` | Add `# comment` at top |
+| `doc_add_blank_line(doc)` | Add blank line |
+| `doc_add_include(doc, path)` | Add `@include` directive |
+| `doc_add_global_var(doc, name, val)` | Add `@set` variable |
+| `doc_add_section(doc, name, comment)` | Add `[Section]` |
+| `doc_add_value(doc, sec, key, val, comment)` | Add key = value |
+| `doc_remove_value(doc, sec, key)` | Remove a key |
+| `doc_remove_section(doc, name)` | Remove a section |
+| `doc_save_config(doc)` | Save to `doc.path` |
+| `doc_save_config(doc, path)` | Save to custom path |
+| `doc_load_as_document(path)` | Load file for editing |
 
-## C Usage
-``` c
-#define SEIN_IMPLEMENTATION
-#include "../sein.h"
-#include <stdio.h>
+---
 
-int main(void)
-{
-    SeinConfig *cfg = sein_alloc();
-    if (!cfg) return 1;
-    sein_parse(cfg, "example.sein");
+## C API
 
-    /// string ///
-    const char *name = sein_get(cfg, "App",      "name",    "unknown");
-    const char *host = sein_get(cfg, "Database", "host",    "localhost");
+Include: `#define SEIN_IMPLEMENTATION` then `#include "sein.h"`  
+Compile: `-lpthread`
 
-    /// int / float ///
-    int   port    = sein_get_int  (cfg, "Server", "port",    8080);
-    float timeout = sein_get_float(cfg, "Server", "timeout", 30.f);
+**Lifecycle**
 
-    /// bool ///
-    int debug = sein_get_bool(cfg, "App",       "debug",   0);
-    int tls   = sein_get_bool(cfg, "Server.TLS","enabled", 0);
+| Function | Description |
+|---|---|
+| `sein_alloc()` | Allocate a new `SeinConfig*` |
+| `sein_parse(cfg, path, usage_async)` | Parse file (sync or async) |
+| `sein_wait(cfg)` | Block until async parse finishes |
+| `sein_destroy(cfg)` | Free all resources |
 
-    /// arrays //
-    float color_name[4];
-    int   color_count = sein_get_float_array(cfg, "App", "color_name", ';', color_name, 4);
+**Getters**
 
-    char tags[32][SEIN_MAX_VAL_LEN];
-    int  tag_count = sein_get_array(cfg, "App", "tags", ';', tags, 32);
+| Function | Returns |
+|---|---|
+| `sein_get(cfg, section, key, default)` | `const char*` |
+| `sein_get_int(cfg, section, key, default)` | `int` |
+| `sein_get_float(cfg, section, key, default)` | `float` |
+| `sein_get_bool(cfg, section, key, default)` | `int` (0 / 1) |
+| `sein_get_array(cfg, sec, key, sep, out, max)` | `int` (count) |
+| `sein_get_int_array(cfg, sec, key, sep, out, max)` | `int` (count) |
+| `sein_get_float_array(cfg, sec, key, sep, out, max)` | `int` (count) |
 
-    int ports[32];
-    int port_count = sein_get_int_array(cfg, "Server", "allowed_ports", ';', ports, 32);
+**Writer**
 
-    int layers[32];
-    int layer_count = sein_get_int_array(cfg, "ML", "layers", ';', layers, 32);
+| Function | Description |
+|---|---|
+| `create_new_config(path, usage_async)` | Create new `SeinDocument*` |
+| `sein_doc_add_comment(doc, text)` | Add `# comment` |
+| `sein_doc_add_blank(doc)` | Add blank line |
+| `sein_doc_add_include(doc, path, comment)` | Add `@include` directive |
+| `sein_doc_add_global_var(doc, name, val, comment)` | Add `@set` variable |
+| `sein_doc_add_section(doc, name, comment)` | Add `[Section]` |
+| `sein_doc_add_value(doc, sec, key, val, comment)` | Add key = value |
+| `sein_doc_remove_value(doc, sec, key)` | Remove a key |
+| `sein_doc_remove_section(doc, name)` | Remove a section |
+| `sein_doc_save(doc)` | Save to `doc->path` |
+| `sein_doc_free(doc)` | Free all resources |
+| `sein_doc_load(path)` | Load file for editing |
 
-    float lr_arr[32];
-    int   lr_count = sein_get_float_array(cfg, "Server", "backoff_times", ';', lr_arr, 32);
+---
 
-    printf("App name: %s\n", name);
-    printf("App color name(RGBA): r:%.4f g:%.4f b:%.4f a:%.4f\n",
-        color_count > 0 ? color_name[0] : 0.f,
-        color_count > 1 ? color_name[1] : 0.f,
-        color_count > 2 ? color_name[2] : 0.f,
-        color_count > 3 ? color_name[3] : 0.f);
-    printf("Host:     %s\n",  host);
-    printf("Port:     %d\n",  port);
-    printf("Timeout:  %.2f\n",timeout);
-    printf("Debug:    %s\n",  debug ? "true" : "false");
-    printf("TLS:      %s\n",  tls   ? "true" : "false");
-    if (tag_count   > 0) printf("Tags:     %s\n",   tags[0]);
-    if (port_count  > 0) printf("Ports:    %d\n",   ports[0]);
-    if (layer_count > 0) printf("Layers:   %d\n",   layers[0]);
-    if (lr_count    > 0) printf("lr arr:   %.4f\n", lr_arr[0]);
+## Python API
 
-    sein_destroy(cfg);
-    return 0;
-}
-```
+Import: `import sein`
 
-## Python Usage
-``` python
-import sein
+**Parse**
 
-cfg = sein.parse_sein("example.sein")
+| Function | Returns | Notes |
+|---|---|---|
+| `sein.parse_sein(path, usage_async=False)` | `SeinResult` | Sync or async parse |
+| `result.data` | `dict` | The parsed config dict |
+| `result.wait()` | — | Block until async parse finishes |
+| `result.done()` | `bool` | Check if async parse is complete |
 
-## string ##
-name      = sein.get_value(cfg, "App",        "name",    "unknown")
-fullname  = sein.get_value(cfg, "App",        "full_name")
-host      = sein.get_value(cfg, "Database",   "host",    "localhost")
-color_name = sein.get_float_array(cfg, "App", "color_name")
+**Getters** (`cfg` = `result.data`)
 
-## int / float ##
-port    = sein.get_int  (cfg, "Server", "port",    8080)
-timeout = sein.get_float(cfg, "Server", "timeout", 30.0)
+| Function | Returns |
+|---|---|
+| `get_value(cfg, section, key, default)` | `str` |
+| `get_int(cfg, section, key, default)` | `int` |
+| `get_float(cfg, section, key, default)` | `float` |
+| `get_bool(cfg, section, key, default)` | `bool` |
+| `get_array(cfg, section, key)` | `list[str]` |
+| `get_int_array(cfg, section, key)` | `list[int]` |
+| `get_float_array(cfg, section, key)` | `list[float]` |
 
-## bool ##
-debug = sein.get_bool(cfg, "App",        "debug",   False)
-tls   = sein.get_bool(cfg, "Server.TLS", "enabled", False)
+**Writer**
 
-## arrays ##
-tags   = sein.get_array      (cfg, "App",    "tags")
-ports  = sein.get_int_array  (cfg, "Server", "allowed_ports")
-layers = sein.get_int_array  (cfg, "ML",     "layers")
-lr_arr = sein.get_float_array(cfg, "Server", "backoff_times")
+| Function | Description |
+|---|---|
+| `create_new_config(path, usage_async=False)` | Create new document |
+| `add_header_comment(doc, text)` | Add `# comment` |
+| `add_blank_line(doc)` | Add blank line |
+| `add_include(doc, path)` | Add `@include` directive |
+| `add_global_var(doc, name, val)` | Add `@set` variable |
+| `add_section(doc, name, comment=None)` | Add `[Section]` |
+| `add_value(doc, sec, key, val, comment=None)` | Add key = value |
+| `remove_value(doc, sec, key)` | Remove a key |
+| `remove_section(doc, name)` | Remove a section |
+| `save_config(doc)` | Save to `doc["path"]` |
+| `save_config(doc, path)` | Save to custom path |
+| `load_as_document(path)` | Load file for editing |
 
-print(f"App name: {name}")
-print(f"App full name: {fullname}")
-print(f"App color name(RGBA): r:{color_name[0]} g:{color_name[1]} b:{color_name[2]} a:{color_name[3]}")
-print(f"Host: {host}")
-print(f"Port: {port}")
-print(f"Timeout: {timeout}")
-print(f"Debug: {debug}")
-print(f"TLS: {tls}")
-print(f"Tags: {tags[0]}")
-print(f"Ports: {ports[0]}")
-print(f"Layers: {layers[0]}")
-print(f"lr arr: {lr_arr[0]}")
-```
-
-## Create config (C++)
-``` cpp
-#include "../sein.hpp"
-
-int main(void){
-    auto doc = fd::sein::create_new_config("./configCPP.sein");
-
-    fd::sein::add_header_comment(doc, "Auto-generated");
-    fd::sein::add_include(doc, "colors.sein");
-    fd::sein::add_global_var(doc, "APP_NAME", "My App");
-    fd::sein::add_section(doc, "Window");
-    fd::sein::add_value(doc, "Window", "Title", "${APP_NAME}");
-    fd::sein::add_value(doc, "Window", "Width", "1280", "px");
-    fd::sein::save_config(doc);
-}
-```
-
-## Create config (C)
-``` c
-#define SEIN_IMPLEMENTATION
-#include "../sein.h"
-
-int main(void){
-    SeinDocument *doc = sein_doc_alloc("./configC.sein");
-    
-    sein_doc_add_comment(doc, "Auto-generated");
-    sein_doc_add_include(doc, "colors.sein", NULL);
-    sein_doc_add_global_var(doc, "APP_NAME", "My App", NULL);
-    sein_doc_add_section(doc, "Window", NULL);
-    sein_doc_add_value(doc, "Window", "Title", "${APP_NAME}", NULL);
-    sein_doc_add_value(doc, "Window", "Width", "1280", "px");
-    sein_doc_save(doc);
-    sein_doc_free(doc);
-}
-```
-
-## Create config (Python)
-``` python
-import sein
-
-doc = sein.create_new_config("./configPY.sein")
-
-sein.add_header_comment(doc, "Auto-generated")
-sein.add_include(doc, "colors.sein")
-sein.add_global_var(doc, "APP_NAME", "My App")
-sein.add_section(doc, "Window")
-sein.add_value(doc, "Window", "Title", "${APP_NAME}")
-sein.add_value(doc, "Window", "Width", "1280", "px")
-sein.save_config(doc)
-```
+---
 
 **VSCode Extension**
 
-Install:
 ```
 ext install Fepsid.sein-language-support
 ```

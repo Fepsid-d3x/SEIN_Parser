@@ -1,22 +1,39 @@
 from __future__ import annotations
 
+"""
+sein.py — SEIN config parser (Python 3.8+)
+
+Async:
+    result = parse_sein(path, usage_async=True)
+    result.wait()              # block until parsing is done #
+    cfg = result.data          # then use the config #
+"""
+
 import os
 import textwrap
+import threading
 from dataclasses import dataclass, field
 from enum import Enum, auto
 from typing import Optional
 
 Config = dict[str, dict[str, str]]
 
-## Internal helpers ##
+
+# Internal helpers #
 
 def _trim(s: str) -> str:
     return s.strip()
 
 
 def _strip_comment(line: str) -> str:
-    pos = line.find('#')
-    return line[:pos] if pos != -1 else line
+    """Strip # comments, respecting quoted strings"""
+    in_quote = False
+    for i, c in enumerate(line):
+        if c == '"':
+            in_quote = not in_quote
+        if not in_quote and c == '#':
+            return line[:i]
+    return line
 
 
 def _strip_quotes(val: str) -> str:
@@ -26,7 +43,6 @@ def _strip_quotes(val: str) -> str:
 
 
 def _dedent(s: str) -> str:
-    """Remove common leading whitespace from all non-empty lines."""
     return textwrap.dedent(s)
 
 
@@ -34,13 +50,12 @@ def _substitute_value(
     val: str,
     config: Config,
     vars_: dict[str, str],
-    depth: int = 0,
 ) -> str:
-    """Expand ${var}, ${section.key}, and ${ENV_VAR} references."""
-    if depth > 8 or not val:
+    """Expand ${VAR}, ${section.key}, ${SYSENV:VAR} references"""
+    if not val:
         return val
 
-    result = []
+    result: list[str] = []
     pos = 0
     while pos < len(val):
         start = val.find('$', pos)
@@ -54,16 +69,21 @@ def _substitute_value(
                 result.append(val[pos:start])
                 var_name = val[start + 2:end]
 
-                dot = var_name.find('.')
-                if dot != -1:
-                    section = var_name[:dot]
-                    key = var_name[dot + 1:]
-                    result.append(config.get(section, {}).get(key, ''))
+                # ${SYSENV:VAR} - always OS environment, never @set #
+                if var_name.startswith('SYSENV:'):
+                    result.append(os.environ.get(var_name[7:], ''))
                 else:
-                    if var_name in vars_:
-                        result.append(vars_[var_name])
+                    dot = var_name.find('.')
+                    if dot != -1:
+                        section = var_name[:dot]
+                        key = var_name[dot + 1:]
+                        result.append(config.get(section, {}).get(key, ''))
                     else:
-                        result.append(os.environ.get(var_name, ''))
+                        # @set takes priority over OS environment #
+                        if var_name in vars_:
+                            result.append(vars_[var_name])
+                        else:
+                            result.append(os.environ.get(var_name, ''))
 
                 pos = end + 1
                 continue
@@ -78,8 +98,8 @@ def _parse_file(
     path: str,
     result: Config,
     vars_: dict[str, str],
+    inherit: dict[str, str],   # child -> parent #
     depth: int = 0,
-    substitute: bool = True,
 ) -> None:
     if depth > 8:
         print(f"[SEIN Parser]: @include depth limit reached at: {path}")
@@ -112,9 +132,7 @@ def _parse_file(
             end_pos = line.find(')R"')
             if end_pos != -1:
                 raw_val += line[:end_pos]
-                final_val = _dedent(raw_val)
-                if substitute:
-                    final_val = _substitute_value(final_val, result, vars_)
+                final_val = _substitute_value(_dedent(raw_val), result, vars_)
                 result.setdefault(current_section, {})[raw_key] = final_val
                 raw_key = raw_val = ''
                 in_raw = False
@@ -131,9 +149,9 @@ def _parse_file(
             stripped = _trim(clean)
             multiline_val += ' ' + stripped
             if not continues:
-                final_val = _strip_quotes(_trim(multiline_val))
-                if substitute:
-                    final_val = _substitute_value(final_val, result, vars_)
+                final_val = _substitute_value(
+                    _strip_quotes(_trim(multiline_val)), result, vars_
+                )
                 result.setdefault(current_section, {})[multiline_key] = final_val
                 multiline_key = multiline_val = ''
                 in_multiline = False
@@ -144,27 +162,41 @@ def _parse_file(
             continue
 
         ## @set ##
-        if clean.startswith('@set'):
+        if clean.startswith('@set') and (len(clean) == 4 or clean[4] in (' ', '\t')):
             rest = _trim(clean[4:])
             eq = rest.find('=')
             if eq != -1:
                 var_name = _trim(rest[:eq])
-                var_val = _strip_quotes(_trim(rest[eq + 1:]))
-                if substitute:
-                    var_val = _substitute_value(var_val, result, vars_)
-                vars_[var_name] = var_val
+                var_val  = _strip_quotes(_trim(rest[eq + 1:]))
+                vars_[var_name] = _substitute_value(var_val, result, vars_)
             continue
 
         ## @include ##
         if clean.startswith('@include'):
             inc = _strip_quotes(_trim(clean[8:]))
             inc_path = os.path.join(base_dir, inc) if base_dir else inc
-            _parse_file(inc_path, result, vars_, depth + 1, substitute)
+            _parse_file(inc_path, result, vars_, inherit, depth + 1)
             continue
 
-        ## [Section] ##
+        ## [Section] or [Child : [Parent]] ##
         if clean.startswith('[') and clean.endswith(']'):
-            current_section = _trim(clean[1:-1])
+            inner = _trim(clean[1:-1])
+            colon = inner.find(':')
+            if colon != -1:
+                child_name  = _trim(inner[:colon])
+                parent_raw  = _trim(inner[colon + 1:])
+                # parent_raw should look like "[Parent]"
+                if parent_raw.startswith('['):
+                    parent_raw = parent_raw[1:]
+                    if parent_raw.endswith(']'):
+                        parent_raw = parent_raw[:-1]
+                parent_name = _trim(parent_raw)
+                current_section = child_name
+                if parent_name:
+                    inherit[current_section] = parent_name
+            else:
+                current_section = inner
+            result.setdefault(current_section, {})
             continue
 
         ## key = value ##
@@ -175,42 +207,100 @@ def _parse_file(
         key = _trim(clean[:sep])
         val = _trim(clean[sep + 1:])
 
-        ## Raw string: "R( ... )R" ##
+        ## Raw string "R( ... )R" ##
         if val.startswith('"R('):
             end_pos = val.find(')R"', 3)
             if end_pos != -1:
-                raw_str = val[3:end_pos]
-                if substitute:
-                    raw_str = _substitute_value(raw_str, result, vars_)
+                raw_str = _substitute_value(val[3:end_pos], result, vars_)
                 result.setdefault(current_section, {})[key] = raw_str
             else:
                 raw_key = key
                 raw_val = val[3:] + '\n'
-                in_raw = True
+                in_raw  = True
             continue
 
         ## Multiline continuation ##
         if val and val[-1] == '\\':
             multiline_key = key
             multiline_val = _trim(val[:-1])
-            in_multiline = True
+            in_multiline  = True
             continue
 
-        final_val = _strip_quotes(val)
-        if substitute:
-            final_val = _substitute_value(final_val, result, vars_)
+        final_val = _substitute_value(_strip_quotes(val), result, vars_)
         result.setdefault(current_section, {})[key] = final_val
 
-## Public parser API ##
 
-def parse_sein(path: str) -> Config:
-    """Parse a .sein config file and return a nested dict {section: {key: value}}."""
+def _resolve_inheritance(result: Config, inherit: dict[str, str]) -> None:
+    """Copy parent keys into child sections (child keys take priority)."""
+    for child, parent in inherit.items():
+        parent_sec = result.get(parent)
+        if not parent_sec:
+            continue
+        child_sec = result.setdefault(child, {})
+        for k, v in parent_sec.items():
+            if k not in child_sec:
+                child_sec[k] = v
+
+
+# SeinResult - returned by parse_sein #
+
+class SeinResult:
+    """Holds parsed config data plus an optional async thread handle"""
+
+    def __init__(self, data: Config, thread: Optional[threading.Thread] = None):
+        self.data   = data
+        self._thread = thread
+
+    def wait(self) -> None:
+        """Block until async parsing is complete (no-op for sync)"""
+        if self._thread and self._thread.is_alive():
+            self._thread.join()
+        self._thread = None
+
+    def done(self) -> bool:
+        """True if parsing is complete."""
+        return self._thread is None or not self._thread.is_alive()
+
+    # Convenience pass-through so callers can use result[section] directly #
+    def __getitem__(self, key: str) -> dict[str, str]:
+        return self.data[key]
+
+    def get(self, key: str, default=None):
+        return self.data.get(key, default)
+
+
+# Public parser API #
+
+def parse_sein(path: str, usage_async: bool = False) -> SeinResult:
+    """Parse a .sein config file
+
+    If usage_async=True the call returns immediately; call result.wait()
+    before accessing result.data
+    """
+    if not usage_async:
+        result: Config = {}
+        vars_:  dict[str, str] = {}
+        inherit: dict[str, str] = {}
+        _parse_file(path, result, vars_, inherit)
+        _resolve_inheritance(result, inherit)
+        return SeinResult(result)
+
+    # Async: parse in a background thread #
     result: Config = {}
-    vars_: dict[str, str] = {}
-    _parse_file(path, result, vars_)
-    return result
+    vars_:  dict[str, str] = {}
+    inherit: dict[str, str] = {}
 
-## Getter helpers ##
+    def _worker() -> None:
+        _parse_file(path, result, vars_, inherit)
+        _resolve_inheritance(result, inherit)
+
+    t = threading.Thread(target=_worker, daemon=True)
+    sr = SeinResult(result, t)
+    t.start()
+    return sr
+
+
+# Getter helpers #
 
 def get_value(cfg: Config, section: str, key: str, fallback: str = '') -> str:
     return cfg.get(section, {}).get(key, fallback)
@@ -274,7 +364,8 @@ def get_float_array(cfg: Config, section: str, key: str, delim: str = ';') -> li
             result.append(0.0)
     return result
 
-## Writer API — data classes ##
+
+# Writer API - data classes #
 
 @dataclass
 class SeinKeyValue:
@@ -300,34 +391,44 @@ class DirectiveKind(Enum):
 @dataclass
 class SeinDirective:
     kind:    DirectiveKind = DirectiveKind.Blank
-    operand: str = ''   ## path for Include, name for Set, text for Comment ##
-    value:   str = ''   ## only used for Set ##
-    comment: str = ''   ## optional inline comment for Set / Include ##
+    operand: str = ''
+    value:   str = ''
+    comment: str = ''
 
 
 @dataclass
 class SeinDocument:
-    path:       str = ''
-    directives: list[SeinDirective] = field(default_factory=list)
-    sections:   list[SeinSection]   = field(default_factory=list)
+    path:         str = ''
+    directives:   list[SeinDirective] = field(default_factory=list)
+    sections:     list[SeinSection]   = field(default_factory=list)
+    usage_async:  bool = False
 
-## Document construction helpers ##
 
-def create_new_config(path: str) -> SeinDocument:
-    return SeinDocument(path=path)
+# Document construction helpers #
+
+def create_new_config(path: str, usage_async: bool = False) -> SeinDocument:
+    """Create a new empty SeinDocument.
+
+    usage_async=True stores the flag (reserved for future async saves).
+    """
+    return SeinDocument(path=path, usage_async=usage_async)
 
 
 def add_include(doc: SeinDocument, path: str, comment: str = '') -> None:
-    doc.directives.append(SeinDirective(DirectiveKind.Include, operand=path, comment=comment))
+    doc.directives.append(
+        SeinDirective(DirectiveKind.Include, operand=path, comment=comment)
+    )
 
 
 def add_global_var(doc: SeinDocument, name: str, value: str, comment: str = '') -> None:
     for d in doc.directives:
         if d.kind == DirectiveKind.Set and d.operand == name:
-            d.value = value
+            d.value   = value
             d.comment = comment
             return
-    doc.directives.append(SeinDirective(DirectiveKind.Set, operand=name, value=value, comment=comment))
+    doc.directives.append(
+        SeinDirective(DirectiveKind.Set, operand=name, value=value, comment=comment)
+    )
 
 
 def add_header_comment(doc: SeinDocument, text: str) -> None:
@@ -358,11 +459,12 @@ def remove_section(doc: SeinDocument, name: str) -> None:
     doc.sections = [s for s in doc.sections if s.name != name]
 
 
-def add_value(doc: SeinDocument, section: str, key: str, value: str, comment: str = '') -> None:
+def add_value(doc: SeinDocument, section: str, key: str,
+              value: str, comment: str = '') -> None:
     sec = add_section(doc, section)
     for kv in sec.entries:
         if kv.key == key:
-            kv.value = value
+            kv.value   = value
             kv.comment = comment
             return
     sec.entries.append(SeinKeyValue(key=key, value=value, comment=comment))
@@ -373,7 +475,8 @@ def remove_value(doc: SeinDocument, section: str, key: str) -> None:
     if sec:
         sec.entries = [kv for kv in sec.entries if kv.key != key]
 
-## Serialization helpers ##
+
+# Serialization helpers #
 
 def _needs_quotes(v: str) -> bool:
     if not v:
@@ -391,7 +494,7 @@ def _inline_comment(comment: str) -> str:
     return f'  # {comment}' if comment else ''
 
 
-## save_config ##
+# save_config #
 
 def save_config(doc: SeinDocument, path: str = '') -> bool:
     target = path or doc.path
@@ -405,7 +508,10 @@ def save_config(doc: SeinDocument, path: str = '') -> bool:
                 elif d.kind == DirectiveKind.Include:
                     f.write(f'@include "{d.operand}"{_inline_comment(d.comment)}\n')
                 elif d.kind == DirectiveKind.Set:
-                    f.write(f'@set {d.operand} = {_quote_if_needed(d.value)}{_inline_comment(d.comment)}\n')
+                    f.write(
+                        f'@set {d.operand} = {_quote_if_needed(d.value)}'
+                        f'{_inline_comment(d.comment)}\n'
+                    )
 
             if doc.directives and doc.sections:
                 f.write('\n')
@@ -415,7 +521,10 @@ def save_config(doc: SeinDocument, path: str = '') -> bool:
                     f.write(f'# {sec.comment}\n')
                 f.write(f'[{sec.name}]\n')
                 for kv in sec.entries:
-                    f.write(f'{kv.key} = {_quote_if_needed(kv.value)}{_inline_comment(kv.comment)}\n')
+                    f.write(
+                        f'{kv.key} = {_quote_if_needed(kv.value)}'
+                        f'{_inline_comment(kv.comment)}\n'
+                    )
                 if i + 1 < len(doc.sections):
                     f.write('\n')
         return True
@@ -424,7 +533,7 @@ def save_config(doc: SeinDocument, path: str = '') -> bool:
         return False
 
 
-## load_as_document ##
+# load_as_document #
 
 def load_as_document(path: str) -> SeinDocument:
     """Parse an existing .sein file into a SeinDocument (round-trip safe)."""
@@ -442,7 +551,7 @@ def load_as_document(path: str) -> SeinDocument:
 
     for line in lines:
         line = line.rstrip('\r')
-        sv = _trim(line)
+        sv   = _trim(line)
 
         if not sv:
             if in_header:
@@ -478,7 +587,6 @@ def load_as_document(path: str) -> SeinDocument:
         if eq != -1 and current_section:
             key = _trim(sv[:eq])
             val = _trim(sv[eq + 1:])
-            ## strip inline comment ##
             hash_pos = val.find('#')
             if hash_pos != -1:
                 val = _trim(val[:hash_pos])

@@ -3,13 +3,14 @@
 @include "colors.sein"
 
 @set PROJECT_NAME = "My Awesome App"
-@set VERSION = 1.4.2
+@set VERSION      = 1.4.2
+@set LOG_DIR      = /var/log/app
 
 [App]
-name    = ${PROJECT_NAME}
+name      = ${PROJECT_NAME}
 full_name = ${PROJECT_NAME} v${VERSION}
-version = ${VERSION}
-author  = John Doe
+version   = ${VERSION}
+author    = John Doe
 
 debug   = true
 verbose = no
@@ -20,9 +21,13 @@ description = "R(Это очень длинное
     которое не влезает в одну строку)R"
 
 tags     = fast; reliable; cross-platform
-log_dirs = /var/log/app; /tmp/app; /home/user/.logs
+log_dirs = ${LOG_DIR}; /tmp/app; /home/user/.logs
 
 color_name = ${Colors.red}
+
+# System env example: reads HOME / USERPROFILE from the OS
+# Unlike ${HOME}, this always goes to the OS - never to @set variables
+home_dir = ${SYSENV:HOME}
 
 [Server]
 port        = 9000
@@ -31,13 +36,12 @@ timeout     = 30.5
 retry_delay = 0.25
 
 backoff_times = 0.5; 1.0; 2.0; 4.0; 8.0
-
 allowed_ports = 80; 443; 8080; 8443
 
 [Server.TLS]
-enabled  = true
-cert     = "/etc/ssl/certs/app.crt"
-key      = "/etc/ssl/private/app.key"
+enabled   = true
+cert      = "/etc/ssl/certs/app.crt"
+key       = "/etc/ssl/private/app.key"
 protocols = TLSv1.2; TLSv1.3
 
 [Database]
@@ -64,3 +68,23 @@ layers        = 3; 64; 128; 64; 10
 dropout       = 0.1; 0.2; 0.1
 
 model_path = "/models/v2/weights.bin"
+
+# Section inheritance example
+# [Character] is the base - defines default fields for any game entity
+[Character]
+name   = none
+health = 100
+speed  = 5.0
+level  = 1
+
+# [Player] inherits all fields from [Character]
+# Only overridden keys are written here; the rest come from [Character]
+[Player : [Character]]
+name  = Hero
+speed = 8.5
+
+# [Enemy : [Character]] - another child; health is overridden
+[Enemy : [Character]]
+name   = Goblin
+health = 40
+speed  = 3.0
