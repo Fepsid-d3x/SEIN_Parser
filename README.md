@@ -254,7 +254,7 @@ Import: `import sein`
 ### Where SEIN is especially useful 
 - **When minimum size and no dependencies are important** 
 - **In game engines and tools (C++ kernel + Python scripts)** 
-- **Split config into multiple files if necessary ('@include')** 
+- **Split config into multiple files if necessary (`@include`)** 
 - **When you need presets through partition inheritance** 
 - **If you want to have a single format of configs for different languages** 
 
