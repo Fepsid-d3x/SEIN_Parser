@@ -225,28 +225,6 @@ Import: `import sein`
 
 ---
 
-## Comparison with other formats
-
-| Feature | SEIN | INI | TOML | YAML | HCL | HOCON |
-|---|:---:|:---:|:---:|:---:|:---:|:---:|
-| Single-header, no deps | ✓ | ✓ | ✗ | ✗ | ✗ | ✗ |
-| mmap + zero-copy read | ✓ | ✗ | ✗ | ✗ | ✗ | ✗ |
-| Async parsing | ✓ | ✗ | ✗ | ✗ | ✗ | ✗ |
-| Variable substitution | ✓ | ✗ | ✗ | ~ (anchors) | ✓ | ✓ |
-| OS env variable access | ✓ (`${SYSENV:VAR}`) | ✗ | ✗ | ✗ | ✓ | ✓ |
-| Section inheritance | ✓ | ✗ | ✗ | ✗ | ✗ | ~ |
-| `@include` directive | ✓ | ✗ | ✗ | ✗ | ✓ | ✓ |
-| Arrays | ✓ | ✗ | ✓ | ✓ | ✓ | ✓ |
-| Multiline strings | ✓ | ✗ | ✓ | ✓ | ✓ | ✓ |
-| Native datetime type | ✗ | ✗ | ✓ | ✓ | ✓ | ✓ |
-| Nested structures | ~ (dot sections) | ✗ | ✓ | ✓ | ✓ | ✓ |
-| JSON/schema validation | ✗ | ✗ | ✗ | ~ | ✓ | ~ |
-| Spec complexity | low | minimal | moderate | very high | high | high |
-| C/C++ native support | ✓ | ~ | ~ (toml++) | ✗ | ✗ | ✗ |
-| Python native support | ✓ | ~ | ~ | ✗ | ✗ | ✗ |
-
----
-
 ### Performance 
 - **Thanks to the use of mmap (zero-copy read), std::from_chars and minimal allocations, SEIN shows very good parsing speed, especially in C/C++ versions.** 
 - **On small configs, it is comparable to classic INI parsers. On large files with many @include, mmap offers a noticeable advantage over approaches that read the entire file into memory.**
