@@ -245,11 +245,7 @@ Import: `import sein`
 | C/C++ native support | ✓ | ~ | ~ (toml++) | ✗ | ✗ | ✗ |
 | Python native support | ✓ | ~ | ~ | ✗ | ✗ | ✗ |
 
-**Parsing speed** (rough order, fastest → slowest for typical game/app configs):
-
-`INI ≈ SEIN > TOML > HCL > YAML > HOCON`
-
-SEIN matches INI-level speed on small files and pulls ahead on large files thanks to mmap - the OS maps the file into memory without an extra kernel copy. All other formats above require at least one full read-into-buffer pass.
+SEIN matches INI-level speed on small files and pulls ahead on large files thanks to mmap - the OS maps the file into memory without an extra kernel copy.
 
 ---
 
