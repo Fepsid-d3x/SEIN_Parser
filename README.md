@@ -245,24 +245,23 @@ Import: `import sein`
 | C/C++ native support | ✓ | ~ | ~ (toml++) | ✗ | ✗ | ✗ |
 | Python native support | ✓ | ~ | ~ | ✗ | ✗ | ✗ |
 
-SEIN matches INI-level speed on small files and pulls ahead on large files thanks to mmap - the OS maps the file into memory without an extra kernel copy.
-
 ---
 
-### Where SEIN wins
+### Performance 
+- **Thanks to the use of mmap (zero-copy read), std::from_chars and minimal allocations, SEIN shows very good parsing speed, especially in C/C++ versions.** 
+- **On small configs, it is comparable to classic INI parsers. On large files with many @include, mmap offers a noticeable advantage over approaches that read the entire file into memory.**
 
-- **No dependencies** - drop in one `.h` / `.hpp` / `.py` file, done
-- **Fastest cold-start** - mmap avoids the kernel read-copy; background thread (`usage_async`) means the rest of your app initialises in parallel
-- **Inheritance** - `[Child : [Parent]]` lets you define entity templates without duplicating keys (unique among the formats listed)
-- **`@include`** - split large configs across multiple files without any library support
-- **`${SYSENV:VAR}`** - explicit OS-env access that never collides with your `@set` variables
-- **C + C++ + Python from one codebase** - single source of truth for the parser logic
+### Where SEIN is especially useful 
+- **When minimum size and no dependencies are important** 
+- **In game engines and tools (C++ kernel + Python scripts)** 
+- **Split config into multiple files if necessary ('@include')** 
+- **When you need presets through partition inheritance** 
+- **If you want to have a single format of configs for different languages** 
 
-### Where SEIN loses
-
-- **No native datetime type** - use a string and parse it yourself (TOML/HCL/YAML have first-class date/time)
-- **No true nesting** - deep object graphs are awkward (YAML/TOML/HCL handle them natively)
-- **No schema validation** - there is no built-in way to enforce types or required keys
+### Where SEIN Falls Short 
+- **No built-in support for datetime** 
+- **Limited support for deep nesting (dot sections are better)** 
+- **No built-in schema validation**
 
 ---
 
