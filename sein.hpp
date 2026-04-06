@@ -650,6 +650,47 @@ namespace fd::sein {
         return result;
     }
 
+    // Subkey helpers — key[subkey] = value //
+
+    inline std::string_view get_subkey_view(const Config& cfg,
+        std::string_view section, std::string_view key, std::string_view subkey)
+    {
+        std::string composite;
+        composite.reserve(key.size() + subkey.size() + 2);
+        composite.append(key);
+        composite += '[';
+        composite.append(subkey);
+        composite += ']';
+        return get_value_view(cfg, section, composite);
+    }
+
+    inline std::string get_subkey(const Config& cfg,
+        std::string_view section, std::string_view key, std::string_view subkey,
+        std::string_view fallback = {})
+    {
+        auto v = get_subkey_view(cfg, section, key, subkey);
+        return v.empty() ? std::string(fallback) : std::string(v);
+    }
+
+    inline std::vector<std::string> get_subkeys(const Config& cfg,
+        std::string_view section, std::string_view key)
+    {
+        std::vector<std::string> result;
+        auto s = cfg.find(std::string(section));
+        if (s == cfg.end()) return result;
+        std::string prefix(key);
+        prefix += '[';
+        for (const auto& [k, v] : s->second) {
+            if (k.size() > prefix.size() &&
+                k.compare(0, prefix.size(), prefix) == 0 &&
+                k.back() == ']')
+            {
+                result.emplace_back(k.substr(prefix.size(), k.size() - prefix.size() - 1));
+            }
+        }
+        return result;
+    }
+
     // Writer API - types //
     struct SeinKeyValue {
         std::string key;
@@ -785,6 +826,31 @@ namespace fd::sein {
         auto& e = sec->entries;
         e.erase(std::remove_if(e.begin(), e.end(),
             [&](const SeinKeyValue& kv){ return kv.key == key; }), e.end());
+    }
+
+    inline void doc_add_subkey_value(SeinDocument& doc, std::string_view section,
+                                     std::string_view key, std::string_view subkey,
+                                     std::string_view value, std::string_view comment = {})
+    {
+        std::string composite;
+        composite.reserve(key.size() + subkey.size() + 2);
+        composite.append(key);
+        composite += '[';
+        composite.append(subkey);
+        composite += ']';
+        doc_add_value(doc, section, composite, value, comment);
+    }
+
+    inline void doc_remove_subkey_value(SeinDocument& doc, std::string_view section,
+                                        std::string_view key, std::string_view subkey)
+    {
+        std::string composite;
+        composite.reserve(key.size() + subkey.size() + 2);
+        composite.append(key);
+        composite += '[';
+        composite.append(subkey);
+        composite += ']';
+        doc_remove_value(doc, section, composite);
     }
 
     // serialization helpers //
@@ -943,4 +1009,4 @@ namespace fd::sein {
         return doc;
     }
 
-} // fd::sein //
+} 

@@ -133,6 +133,15 @@ int sein_get_int_array  (const SeinConfig *cfg, const char *section,
                          const char *key, char delim,
                          int *out,   int max_out);
 
+// Subkey helpers — key[subkey] = value //
+const char *sein_get_subkey  (const SeinConfig *cfg, const char *section,
+                               const char *key, const char *subkey,
+                               const char *fallback);
+
+int         sein_get_subkeys (const SeinConfig *cfg, const char *section,
+                               const char *key,
+                               char out[][SEIN_MAX_KEY_LEN], int max_out);
+
 // Writer API - types //
 typedef enum {
     SEIN_DIR_BLANK   = 0,
@@ -187,6 +196,12 @@ void          sein_doc_add_value       (SeinDocument *doc, const char *section, 
                                         const char *value, const char *comment);
 void          sein_doc_remove_value    (SeinDocument *doc, const char *section, const char *key);
 void          sein_doc_remove_section  (SeinDocument *doc, const char *name);
+
+void          sein_doc_add_subkey_value   (SeinDocument *doc, const char *section,
+                                           const char *key, const char *subkey,
+                                           const char *value, const char *comment);
+void          sein_doc_remove_subkey_value(SeinDocument *doc, const char *section,
+                                           const char *key, const char *subkey);
 int           sein_doc_save            (const SeinDocument *doc);
 int           sein_doc_save_as         (const SeinDocument *doc, const char *path);
 int           sein_doc_load            (SeinDocument *doc, const char *path);
@@ -962,6 +977,48 @@ int sein_get_int_array(const SeinConfig *cfg, const char *section,
     return count;
 }
 
+// Subkey helpers — key[subkey] = value //
+
+const char *sein_get_subkey(const SeinConfig *cfg, const char *section,
+                             const char *key, const char *subkey,
+                             const char *fallback)
+{
+    char composite[SEIN_MAX_KEY_LEN];
+    snprintf(composite, sizeof(composite), "%s[%s]", key, subkey);
+    return sein_get(cfg, section, composite, fallback);
+}
+
+int sein_get_subkeys(const SeinConfig *cfg, const char *section,
+                     const char *key,
+                     char out[][SEIN_MAX_KEY_LEN], int max_out)
+{
+    char prefix[SEIN_MAX_KEY_LEN];
+    snprintf(prefix, sizeof(prefix), "%s[", key);
+    size_t prefix_len = strlen(prefix);
+    int count = 0;
+    int nsec = SEIN_ALOAD(cfg->section_count);
+    for (int i = 0; i < nsec && count < max_out; ++i) {
+        if (strcmp(cfg->sections[i].name, section) != 0) continue;
+        const SeinSection *s = &cfg->sections[i];
+        int nk = SEIN_ALOAD(s->entry_count);
+        for (int j = 0; j < nk && count < max_out; ++j) {
+            const char *k = s->entries[j].key;
+            size_t klen = strlen(k);
+            if (klen > prefix_len &&
+                memcmp(k, prefix, prefix_len) == 0 &&
+                k[klen - 1] == ']')
+            {
+                size_t sublen = klen - prefix_len - 1;
+                if (sublen >= SEIN_MAX_KEY_LEN) sublen = SEIN_MAX_KEY_LEN - 1;
+                memcpy(out[count], k + prefix_len, sublen);
+                out[count][sublen] = '\0';
+                ++count;
+            }
+        }
+    }
+    return count;
+}
+
 
 // Writer API - implementation //
 static int sein__doc_needs_quotes(const char *v)
@@ -1258,5 +1315,22 @@ int sein_doc_load(SeinDocument *doc, const char *path)
     return 1;
 }
 
-#endif // SEIN_IMPLEMENTATION //
-#endif // SEIN_H //
+void sein_doc_add_subkey_value(SeinDocument *doc, const char *section,
+                                const char *key, const char *subkey,
+                                const char *value, const char *comment)
+{
+    char composite[SEIN_MAX_KEY_LEN];
+    snprintf(composite, sizeof(composite), "%s[%s]", key, subkey);
+    sein_doc_add_value(doc, section, composite, value, comment);
+}
+
+void sein_doc_remove_subkey_value(SeinDocument *doc, const char *section,
+                                   const char *key, const char *subkey)
+{
+    char composite[SEIN_MAX_KEY_LEN];
+    snprintf(composite, sizeof(composite), "%s[%s]", key, subkey);
+    sein_doc_remove_value(doc, section, composite);
+}
+
+#endif
+#endif
