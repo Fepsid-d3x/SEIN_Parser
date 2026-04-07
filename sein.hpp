@@ -12,6 +12,7 @@
 #include <string>
 #include <string_view>
 #include <vector>
+#include <variant>
 #include <algorithm>
 #include <iostream>
 #include <unordered_map>
@@ -42,12 +43,81 @@ namespace fd::sein {
 
     // Types //
 
-    using Config = std::unordered_map<std::string, std::unordered_map<std::string, std::string>>;
+    struct SeinValue {
+        enum class Type { String, Int, Float, Array };
+
+        std::variant<std::string, int, float, std::vector<SeinValue>> data;
+
+        SeinValue() : data(std::string{}) {}
+        SeinValue(std::string_view s) : data(std::string(s)) {}
+        SeinValue(std::string s) : data(std::move(s)) {}
+        SeinValue(int i) : data(i) {}
+        SeinValue(float f) : data(f) {}
+        SeinValue(std::vector<SeinValue> arr) : data(std::move(arr)) {}
+
+        Type type() const { return static_cast<Type>(data.index()); }
+
+        std::string_view string_view() const {
+            if (auto* p = std::get_if<std::string>(&data)) return *p;
+            return {};
+        }
+
+        const std::string& string_ref() const {
+            static const std::string empty;
+            if (auto* p = std::get_if<std::string>(&data)) return *p;
+            return empty;
+        }
+
+        int as_int(int fallback = 0) const {
+            if (auto* p = std::get_if<int>(&data))    return *p;
+            if (auto* p = std::get_if<float>(&data))  return static_cast<int>(*p);
+            if (auto* p = std::get_if<std::string>(&data)) {
+                int r = fallback;
+                std::from_chars(p->data(), p->data() + p->size(), r);
+                return r;
+            }
+            return fallback;
+        }
+
+        float as_float(float fallback = 0.f) const {
+            if (auto* p = std::get_if<float>(&data))  return *p;
+            if (auto* p = std::get_if<int>(&data))    return static_cast<float>(*p);
+            if (auto* p = std::get_if<std::string>(&data)) {
+                float r = fallback;
+#if defined(__cpp_lib_to_chars) && __cpp_lib_to_chars >= 201611L
+                std::from_chars(p->data(), p->data() + p->size(), r);
+#else
+                try { r = std::stof(*p); } catch (...) { r = fallback; }
+#endif
+                return r;
+            }
+            return fallback;
+        }
+
+        bool as_bool(bool fallback = false) const {
+            if (auto* p = std::get_if<int>(&data))   return *p != 0;
+            if (auto* p = std::get_if<float>(&data)) return *p != 0.f;
+            if (auto* p = std::get_if<std::string>(&data)) {
+                std::string_view sv(*p);
+                if (sv == "true"  || sv == "yes" || sv == "1") return true;
+                if (sv == "false" || sv == "no"  || sv == "0") return false;
+                std::string lower(*p);
+                std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+                if (lower == "true"  || lower == "yes") return true;
+                if (lower == "false" || lower == "no")  return false;
+            }
+            return fallback;
+        }
+    };
+
+    using Config = std::unordered_map<std::string,
+                   std::unordered_map<std::string, SeinValue>>;
 
     // SeinResult - returned by parse_sein() //
     // Holds data + optional async future //
     struct SeinResult {
         Config               data;
+        bool                 ok    = false;
         std::shared_future<void> ready; // valid only when async //
 
         // Block until parsing completes (no-op for sync) //
@@ -98,6 +168,20 @@ namespace fd::sein {
         return std::string(strip_quotes_view(val));
     }
 
+    inline std::string normalize_key(std::string_view k) {
+        size_t lb = k.find('[');
+        if (lb == std::string_view::npos) return std::string(k);
+        size_t rb = k.rfind(']');
+        if (rb == std::string_view::npos || rb <= lb) return std::string(k);
+        std::string_view inner = strip_quotes_view(k.substr(lb + 1, rb - lb - 1));
+        std::string result;
+        result.reserve(lb + 1 + inner.size() + 1);
+        result.append(k.substr(0, lb + 1));
+        result.append(inner);
+        result += ']';
+        return result;
+    }
+
     inline std::string dedent(std::string_view s) {
         std::vector<std::string_view> lines;
         size_t start = 0;
@@ -122,6 +206,31 @@ namespace fd::sein {
             if (i + 1 < lines.size()) result += '\n';
         }
         return result;
+    }
+
+    // Build a typed SeinValue from a final substituted string //
+    inline SeinValue make_value(std::string_view sv) {
+        if (sv.empty()) return SeinValue(std::string{});
+
+        // try int //
+        int ival = 0;
+        {
+            auto [p, ec] = std::from_chars(sv.data(), sv.data() + sv.size(), ival);
+            if (ec == std::errc{} && p == sv.data() + sv.size())
+                return SeinValue(ival);
+        }
+
+        // try float //
+#if defined(__cpp_lib_to_chars) && __cpp_lib_to_chars >= 201611L
+        float fval = 0.f;
+        {
+            auto [p, ec] = std::from_chars(sv.data(), sv.data() + sv.size(), fval);
+            if (ec == std::errc{} && p == sv.data() + sv.size())
+                return SeinValue(fval);
+        }
+#endif
+
+        return SeinValue(std::string(sv));
     }
 
     // Expand ${VAR}, ${section.key}, ${SYSENV:VAR} //
@@ -161,7 +270,8 @@ namespace fd::sein {
                             auto s_it = config.find(sec_str);
                             if (s_it != config.end()) {
                                 auto k_it = s_it->second.find(key_str);
-                                if (k_it != s_it->second.end()) result += k_it->second;
+                                if (k_it != s_it->second.end())
+                                    result += k_it->second.string_ref();
                             }
                         } else {
                             // @set takes priority over OS environment //
@@ -300,7 +410,8 @@ namespace fd::sein {
     // Inheritance map: child -> parent section name //
     using InheritMap = std::unordered_map<std::string, std::string>;
 
-    inline void parse_file(std::string_view path,
+    // Returns true if the file was successfully opened //
+    inline bool parse_file(std::string_view path,
         Config& result,
         std::unordered_map<std::string, std::string>& vars,
         InheritMap& inherit,
@@ -308,13 +419,13 @@ namespace fd::sein {
     {
         if (depth > 8) {
             std::cerr << "[SEIN Parser]: @include depth limit reached at: " << path << "\n";
-            return;
+            return false;
         }
 
         LineSrc src;
         if (!src.open(path)) {
             std::cerr << "[SEIN Parser]: Failed to open: " << path << "\n";
-            return;
+            return false;
         }
 
         std::string base_dir;
@@ -344,7 +455,7 @@ namespace fd::sein {
                 if (ep != std::string_view::npos) {
                     raw_val.append(line.substr(0, ep));
                     auto fv = dedent(raw_val);
-                    result[current_section][raw_key] = substitute_value(fv, result, vars);
+                    result[current_section][raw_key] = make_value(substitute_value(fv, result, vars));
                     raw_key.clear(); raw_val.clear(); in_raw = false;
                 } else {
                     raw_val.append(line);
@@ -364,7 +475,7 @@ namespace fd::sein {
                 multiline_val.append(stripped);
                 if (!cont) {
                     auto fv = strip_quotes(trim_view(multiline_val));
-                    result[current_section][multiline_key] = substitute_value(fv, result, vars);
+                    result[current_section][multiline_key] = make_value(substitute_value(fv, result, vars));
                     multiline_key.clear(); multiline_val.clear(); in_multiline = false;
                 }
                 continue;
@@ -419,7 +530,7 @@ namespace fd::sein {
                     current_section = trim(inner);
                 }
                 // ensure section exists //
-                result.emplace(current_section, std::unordered_map<std::string,std::string>{});
+                result.emplace(current_section, std::unordered_map<std::string, SeinValue>{});
                 continue;
             }
 
@@ -429,14 +540,14 @@ namespace fd::sein {
 
             auto key_sv  = trim_view(sv.substr(0, sep));
             auto val_sv  = trim_view(sv.substr(sep + 1));
-            std::string key(key_sv);
+            std::string key = normalize_key(key_sv);
 
             // raw string "R( ... )R" //
             if (val_sv.size() >= 3 && val_sv.substr(0, 3) == "\"R(") {
                 size_t ep = val_sv.find(")R\"", 3);
                 if (ep != std::string_view::npos) {
                     auto rs = std::string(val_sv.substr(3, ep - 3));
-                    result[current_section][key] = substitute_value(rs, result, vars);
+                    result[current_section][key] = make_value(substitute_value(rs, result, vars));
                 } else {
                     raw_key = key;
                     raw_val.assign(val_sv.substr(3));
@@ -455,10 +566,11 @@ namespace fd::sein {
             }
 
             auto fv = std::string(strip_quotes_view(val_sv));
-            result[current_section][key] = substitute_value(fv, result, vars);
+            result[current_section][key] = make_value(substitute_value(fv, result, vars));
         }
 
         src.close();
+        return true;
     }
 
     // apply section inheritance: copy parent keys not defined in child //
@@ -488,49 +600,26 @@ namespace fd::sein {
             sr.data.reserve(8);
             std::unordered_map<std::string, std::string> vars;
             detail::InheritMap inherit;
-            detail::parse_file(path, sr.data, vars, inherit);
+            sr.ok = detail::parse_file(path, sr.data, vars, inherit);
             detail::resolve_inheritance(sr.data, inherit);
             return sr;
         }
 
         // async: parse in background thread via std::async //
-        auto shared_data = std::make_shared<Config>();
-        std::string spath(path);
-
-        auto fut = std::async(std::launch::async, [shared_data, spath]() {
-            shared_data->reserve(8);
-            std::unordered_map<std::string, std::string> vars;
-            detail::InheritMap inherit;
-            detail::parse_file(spath, *shared_data, vars, inherit);
-            detail::resolve_inheritance(*shared_data, inherit);
-        });
-
-        SeinResult sr;
-        sr.ready = fut.share();
-        // data pointer is separate - caller must call sr.wait() first //
-        // we store data in the shared_ptr and swap after future completes via a proxy //
-        // simpler: just let the future fill shared_data and swap on wait //
-        // the ready future signals completion; provide a wrapper that swaps on done //
-
-        // attach a continuation-like mechanism via a detached thread //
-        auto* raw_sr = &sr;
-        (void)raw_sr; // not possible to mutate sr after return; caller must wait() //
-
-        // store the shared_data so the caller can access after wait() //
-        // we attach the data pointer directly to the SeinResult via the future //
-        // the cleanest approach for a value type: block a minimal proxy //
-
-        // revised: run in a thread, fill sr.data directly via promise/future //
         std::promise<void> prom;
+        SeinResult sr;
+        sr.data.reserve(8);
         sr.ready = prom.get_future().share();
 
-        // we need to fill sr.data from the thread - must pass by pointer //
         Config* cfg_ptr = &sr.data;
-        std::thread([cfg_ptr, spath, p = std::move(prom)]() mutable {
+        bool*   ok_ptr  = &sr.ok;
+        std::string spath(path);
+
+        std::thread([cfg_ptr, ok_ptr, spath, p = std::move(prom)]() mutable {
             cfg_ptr->reserve(8);
             std::unordered_map<std::string, std::string> vars;
             detail::InheritMap inherit;
-            detail::parse_file(spath, *cfg_ptr, vars, inherit);
+            *ok_ptr = detail::parse_file(spath, *cfg_ptr, vars, inherit);
             detail::resolve_inheritance(*cfg_ptr, inherit);
             p.set_value();
         }).detach();
@@ -539,61 +628,56 @@ namespace fd::sein {
     }
 
     // Getters //
-    inline std::string_view get_value_view(const Config& cfg,
+    inline const SeinValue* get_value_ptr(const Config& cfg,
         std::string_view section, std::string_view key)
     {
         auto s = cfg.find(std::string(section));
-        if (s == cfg.end()) return {};
+        if (s == cfg.end()) return nullptr;
         auto k = s->second.find(std::string(key));
-        if (k == s->second.end()) return {};
-        return k->second;
+        if (k == s->second.end()) return nullptr;
+        return &k->second;
+    }
+
+    inline std::string_view get_value_view(const Config& cfg,
+        std::string_view section, std::string_view key)
+    {
+        const SeinValue* v = get_value_ptr(cfg, section, key);
+        if (!v) return {};
+        return v->string_view();
     }
 
     inline std::string get_value(const Config& cfg,
         std::string_view section, std::string_view key,
         std::string_view fallback = {})
     {
-        auto v = get_value_view(cfg, section, key);
-        return v.empty() ? std::string(fallback) : std::string(v);
+        const SeinValue* v = get_value_ptr(cfg, section, key);
+        if (!v) return std::string(fallback);
+        auto sv = v->string_view();
+        if (!sv.empty()) return std::string(sv);
+        if (v->type() == SeinValue::Type::Int)   return std::to_string(v->as_int());
+        if (v->type() == SeinValue::Type::Float) return std::to_string(v->as_float());
+        return std::string(fallback);
     }
 
     inline float get_float(const Config& cfg, std::string_view section,
                            std::string_view key, float fallback = 0.f)
     {
-        auto sv = get_value_view(cfg, section, key);
-        if (sv.empty()) return fallback;
-        float r = fallback;
-#if defined(__cpp_lib_to_chars) && __cpp_lib_to_chars >= 201611L
-        std::from_chars(sv.data(), sv.data() + sv.size(), r);
-#else
-        try { r = std::stof(std::string(sv)); } catch (...) { r = fallback; }
-#endif
-        return r;
+        const SeinValue* v = get_value_ptr(cfg, section, key);
+        return v ? v->as_float(fallback) : fallback;
     }
 
     inline int get_int(const Config& cfg, std::string_view section,
                        std::string_view key, int fallback = 0)
     {
-        auto sv = get_value_view(cfg, section, key);
-        if (sv.empty()) return fallback;
-        int r = fallback;
-        auto [ptr, ec] = std::from_chars(sv.data(), sv.data() + sv.size(), r);
-        return (ec == std::errc{}) ? r : fallback;
+        const SeinValue* v = get_value_ptr(cfg, section, key);
+        return v ? v->as_int(fallback) : fallback;
     }
 
     inline bool get_bool(const Config& cfg, std::string_view section,
                          std::string_view key, bool fallback = false)
     {
-        auto sv = get_value_view(cfg, section, key);
-        if (sv.empty()) return fallback;
-        if (sv == "true"  || sv == "yes" || sv == "1") return true;
-        if (sv == "false" || sv == "no"  || sv == "0") return false;
-        /* case-insensitive fallback */
-        std::string lower(sv);
-        std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
-        if (lower == "true"  || lower == "yes" || lower == "1") return true;
-        if (lower == "false" || lower == "no"  || lower == "0") return false;
-        return fallback;
+        const SeinValue* v = get_value_ptr(cfg, section, key);
+        return v ? v->as_bool(fallback) : fallback;
     }
 
     // Array helpers //
@@ -685,7 +769,10 @@ namespace fd::sein {
                 k.compare(0, prefix.size(), prefix) == 0 &&
                 k.back() == ']')
             {
-                result.emplace_back(k.substr(prefix.size(), k.size() - prefix.size() - 1));
+                std::string_view raw(k.data() + prefix.size(),
+                                     k.size() - prefix.size() - 1);
+                raw = detail::strip_quotes_view(raw);
+                result.emplace_back(raw);
             }
         }
         return result;
@@ -1009,4 +1096,4 @@ namespace fd::sein {
         return doc;
     }
 
-} 
+} // namespace fd::sein //

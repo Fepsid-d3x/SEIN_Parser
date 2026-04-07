@@ -241,6 +241,22 @@ static char *sein__strip_quotes(char *val)
     return val;
 }
 
+static void sein__normalize_key(char *key)
+{
+    if (!key) return;
+    char *lb = strchr(key, '[');
+    if (!lb) return;
+    char *rb = strrchr(key, ']');
+    if (!rb || rb <= lb) return;
+    char *inner = lb + 1;
+    size_t inner_len = (size_t)(rb - inner);
+    if (inner_len >= 2 && inner[0] == '"' && inner[inner_len - 1] == '"') {
+        memmove(inner, inner + 1, inner_len - 2);
+        inner[inner_len - 2] = ']';
+        inner[inner_len - 1] = '\0';
+    }
+}
+
 // Lock-free section lookup - acquires section_count once, then reads
 //   sequentially. Safe for concurrent readers after parse is complete //
 static SeinSection *sein__find_section(const SeinConfig *cfg, const char *name)
@@ -513,17 +529,17 @@ static void sein__src_close(SeinSrc *s)
 
 // core parse logic //
 
-static void sein__parse_file(SeinConfig *cfg, const char *path, int depth)
+static int sein__parse_file(SeinConfig *cfg, const char *path, int depth)
 {
     if (depth > SEIN_MAX_INCLUDE_DEPTH) {
         fprintf(stderr, "[SEIN Parser]: @include depth limit reached at: %s\n", path);
-        return;
+        return 0;
     }
 
     SeinSrc src;
     if (!sein__src_open(&src, path)) {
         fprintf(stderr, "[SEIN Parser]: Failed to open: %s\n", path);
-        return;
+        return 0;
     }
 
     // derive base directory for relative @includes //
@@ -688,6 +704,7 @@ static void sein__parse_file(SeinConfig *cfg, const char *path, int depth)
 
         *sep = '\0';
         char *key = sein__trim_inplace(clean);
+        sein__normalize_key(key);
         char *val = sein__trim_inplace(sep + 1);
 
         // raw string: "R(  //
@@ -736,6 +753,7 @@ static void sein__parse_file(SeinConfig *cfg, const char *path, int depth)
     }
 
     sein__src_close(&src);
+    return 1;
 }
 
 // async support //
@@ -775,7 +793,7 @@ int sein_parse(SeinConfig *cfg, const char *path, bool usage_async)
     SEIN_ASTORE(cfg->_async_done, 0);
 
     if (!usage_async) {
-        sein__parse_file(cfg, path, 0);
+        if (!sein__parse_file(cfg, path, 0)) return 0;
         sein__resolve_inheritance(cfg);
         SEIN_ASTORE(cfg->_async_done, 1);
         return 1;
@@ -1008,9 +1026,13 @@ int sein_get_subkeys(const SeinConfig *cfg, const char *section,
                 memcmp(k, prefix, prefix_len) == 0 &&
                 k[klen - 1] == ']')
             {
-                size_t sublen = klen - prefix_len - 1;
+                const char *sub    = k + prefix_len;
+                size_t      sublen = klen - prefix_len - 1;
+                if (sublen >= 2 && sub[0] == '"' && sub[sublen - 1] == '"') {
+                    ++sub; sublen -= 2;
+                }
                 if (sublen >= SEIN_MAX_KEY_LEN) sublen = SEIN_MAX_KEY_LEN - 1;
-                memcpy(out[count], k + prefix_len, sublen);
+                memcpy(out[count], sub, sublen);
                 out[count][sublen] = '\0';
                 ++count;
             }
