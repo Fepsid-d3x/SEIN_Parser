@@ -19,18 +19,20 @@ A very lightweight **single-file** .ini-style config parser for C++17 / C11 / Py
 - `@include "other.sein"` directive (recursive, with depth limit)
 - `@set VAR = value` global variables
 - Referencing values via `${Section.key}` or `${VAR}`
-- **System env variables via `${SYSENV:VAR}`** — always reads from the OS, never from `@set`
+- **System env variables via `${SYSENV:VAR}`** - always reads from the OS, never from `@set`
 - **Section inheritance** `[Child : [Parent]]`
-- **Async parsing** — `usage_async` flag in `parse_sein` / `create_new_config`
+- **Async parsing** - `usage_async` flag in `parse_sein` / `create_new_config`
+- **Subkey entries** `key[subkey] = value` with dedicated getters
+- **Fully typed values** - parsed once as `Int`, `Float`, or `String`; all getters work on the stored type directly
 - Automatic whitespace trimming
-- Getters: string, int, float, bool, arrays
+- Getters: string, int, float, bool, arrays, subkeys
 - Writer API for creating and editing configs programmatically
 
 ## Features
 - No external dependencies
-- mmap-based file reading (POSIX & Windows) — zero extra copy into kernel cache
+- mmap-based file reading (POSIX & Windows) - zero extra copy into kernel cache
 - Lock-free hot paths in C (`_Atomic` counts, acquire/release ordering)
-- `std::from_chars` in C++ — no allocations, no exceptions for number parsing
+- `std::from_chars` in C++ - no allocations, no exceptions for number parsing
 - Background thread parsing (pthreads / `std::thread` / Python `threading`)
 - Case-insensitive bool recognition (`true/yes/1`, `false/no/0`)
 - Safe default values on all getters
@@ -71,7 +73,7 @@ port          = 9000
 timeout       = 30.5
 backoff_times = 0.5; 1.0; 2.0; 4.0; 8.0
 
-# Section inheritance 
+# Section inheritance
 [Character]
 name   = none
 health = 100
@@ -87,6 +89,10 @@ speed = 8.5
 [Enemy : [Character]]
 name   = Goblin
 health = 40
+
+[Animation]
+animation["idle"]  = 0; 64; 4; 16; 16; true
+animation["run"]   = 0; 16; 6; 16; 16; true
 ```
 
 ---
@@ -109,13 +115,19 @@ Compile: `-std=c++17`
 
 | Function | Returns |
 |---|---|
+| `get_value_ptr(cfg, section, key)` | `const SeinValue*` |
 | `get_value(cfg, section, key, default)` | `std::string` |
 | `get_int(cfg, section, key, default)` | `int` |
 | `get_float(cfg, section, key, default)` | `float` |
 | `get_bool(cfg, section, key, default)` | `bool` |
-| `get_array(cfg, section, key)` | `vector<string>` |
-| `get_int_array(cfg, section, key)` | `vector<int>` |
-| `get_float_array(cfg, section, key)` | `vector<float>` |
+| `get_array(cfg, section, key, delim)` | `vector<string>` |
+| `get_int_array(cfg, section, key, delim)` | `vector<int>` |
+| `get_float_array(cfg, section, key, delim)` | `vector<float>` |
+| `get_subkey(cfg, section, key, subkey, default)` | `std::string` |
+| `get_subkey_view(cfg, section, key, subkey)` | `std::string_view` |
+| `get_subkeys(cfg, section, key)` | `vector<string>` |
+
+Values are stored as typed `SeinValue` (`Int`, `Float`, `String`, `Array`). All getters work directly on the stored type — no intermediate string conversion. Array getters handle typed single values and multi-element strings equally, so `size = 32; 32` and `port = 9000` both work correctly through `get_int_array`.
 
 **Writer** (all prefixed with `doc_`)
 
@@ -128,7 +140,9 @@ Compile: `-std=c++17`
 | `doc_add_global_var(doc, name, val)` | Add `@set` variable |
 | `doc_add_section(doc, name, comment)` | Add `[Section]` |
 | `doc_add_value(doc, sec, key, val, comment)` | Add key = value |
+| `doc_add_subkey_value(doc, sec, key, subkey, val, comment)` | Add key[subkey] = value |
 | `doc_remove_value(doc, sec, key)` | Remove a key |
+| `doc_remove_subkey_value(doc, sec, key, subkey)` | Remove key[subkey] |
 | `doc_remove_section(doc, name)` | Remove a section |
 | `doc_save_config(doc)` | Save to `doc.path` |
 | `doc_save_config(doc, path)` | Save to custom path |
@@ -161,6 +175,8 @@ Compile: `-lpthread`
 | `sein_get_array(cfg, sec, key, sep, out, max)` | `int` (count) |
 | `sein_get_int_array(cfg, sec, key, sep, out, max)` | `int` (count) |
 | `sein_get_float_array(cfg, sec, key, sep, out, max)` | `int` (count) |
+| `sein_get_subkey(cfg, section, key, subkey, default)` | `const char*` |
+| `sein_get_subkeys(cfg, section, key, out, max)` | `int` (count) |
 
 **Writer**
 
@@ -173,7 +189,9 @@ Compile: `-lpthread`
 | `sein_doc_add_global_var(doc, name, val, comment)` | Add `@set` variable |
 | `sein_doc_add_section(doc, name, comment)` | Add `[Section]` |
 | `sein_doc_add_value(doc, sec, key, val, comment)` | Add key = value |
+| `sein_doc_add_subkey_value(doc, sec, key, subkey, val, comment)` | Add key[subkey] = value |
 | `sein_doc_remove_value(doc, sec, key)` | Remove a key |
+| `sein_doc_remove_subkey_value(doc, sec, key, subkey)` | Remove key[subkey] |
 | `sein_doc_remove_section(doc, name)` | Remove a section |
 | `sein_doc_save(doc)` | Save to `doc->path` |
 | `sein_doc_free(doc)` | Free all resources |
@@ -190,7 +208,7 @@ Import: `import sein`
 | Function | Returns | Notes |
 |---|---|---|
 | `sein.parse_sein(path, usage_async=False)` | `SeinResult` | Sync or async parse |
-| `result.data` | `dict` | The parsed config dict |
+| `result.data` | `Config` | The parsed config dict |
 | `result.wait()` | — | Block until async parse finishes |
 | `result.done()` | `bool` | Check if async parse is complete |
 
@@ -198,13 +216,18 @@ Import: `import sein`
 
 | Function | Returns |
 |---|---|
+| `get_value_ptr(cfg, section, key)` | `SeinValue \| None` |
 | `get_value(cfg, section, key, default)` | `str` |
 | `get_int(cfg, section, key, default)` | `int` |
 | `get_float(cfg, section, key, default)` | `float` |
 | `get_bool(cfg, section, key, default)` | `bool` |
-| `get_array(cfg, section, key)` | `list[str]` |
-| `get_int_array(cfg, section, key)` | `list[int]` |
-| `get_float_array(cfg, section, key)` | `list[float]` |
+| `get_array(cfg, section, key, delim)` | `list[str]` |
+| `get_int_array(cfg, section, key, delim)` | `list[int]` |
+| `get_float_array(cfg, section, key, delim)` | `list[float]` |
+| `get_subkey(cfg, section, key, subkey, default)` | `str` |
+| `get_subkeys(cfg, section, key)` | `list[str]` |
+
+Values are stored as typed `SeinValue` objects (`SeinType.Int`, `SeinType.Float`, `SeinType.String`, `SeinType.Array`). Each value exposes `.as_int()`, `.as_float()`, `.as_bool()`, `.as_str()` methods. All getters work on the stored type directly.
 
 **Writer**
 
@@ -217,28 +240,30 @@ Import: `import sein`
 | `add_global_var(doc, name, val)` | Add `@set` variable |
 | `add_section(doc, name, comment=None)` | Add `[Section]` |
 | `add_value(doc, sec, key, val, comment=None)` | Add key = value |
+| `add_subkey_value(doc, sec, key, subkey, val, comment=None)` | Add key[subkey] = value |
 | `remove_value(doc, sec, key)` | Remove a key |
+| `remove_subkey_value(doc, sec, key, subkey)` | Remove key[subkey] |
 | `remove_section(doc, name)` | Remove a section |
-| `save_config(doc)` | Save to `doc["path"]` |
+| `save_config(doc)` | Save to `doc.path` |
 | `save_config(doc, path)` | Save to custom path |
 | `load_as_document(path)` | Load file for editing |
 
 ---
 
-### Performance 
-- **Thanks to the use of mmap (zero-copy read), std::from_chars and minimal allocations, SEIN shows very good parsing speed, especially in C/C++ versions.** 
-- **On small configs, it is comparable to classic INI parsers. On large files with many @include, mmap offers a noticeable advantage over approaches that read the entire file into memory.**
+### Performance
+- **Thanks to the use of mmap (zero-copy read), `std::from_chars` and minimal allocations, SEIN shows very good parsing speed, especially in C/C++ versions.**
+- **On small configs, it is comparable to classic INI parsers. On large files with many `@include`, mmap offers a noticeable advantage over approaches that read the entire file into memory.**
 
-### Where SEIN is especially useful 
-- **When minimum size and no dependencies are important** 
-- **In game engines and tools (C++ kernel + Python scripts)** 
-- **Split config into multiple files if necessary (`@include`)** 
-- **When you need presets through partition inheritance** 
-- **If you want to have a single format of configs for different languages** 
+### Where SEIN is especially useful
+- **When minimum size and no dependencies are important**
+- **In game engines and tools (C++ core + Python scripts)**
+- **Split config into multiple files if necessary (`@include`)**
+- **When you need presets through section inheritance**
+- **If you want a single config format across multiple languages**
 
-### Where SEIN Falls Short 
-- **No built-in support for datetime** 
-- **Limited support for deep nesting (dot sections are better)** 
+### Where SEIN Falls Short
+- **No built-in support for datetime**
+- **Limited support for deep nesting (dot sections are better)**
 - **No built-in schema validation**
 
 ---

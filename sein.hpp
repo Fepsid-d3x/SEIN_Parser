@@ -699,13 +699,47 @@ namespace fd::sein {
     inline std::vector<std::string> get_array(const Config& cfg,
         std::string_view section, std::string_view key, char delim = ';')
     {
-        return split_value(get_value_view(cfg, section, key), delim);
+        const SeinValue* v = get_value_ptr(cfg, section, key);
+        if (!v) return {};
+        if (v->type() == SeinValue::Type::Array) {
+            const auto& arr = std::get<std::vector<SeinValue>>(v->data);
+            std::vector<std::string> result;
+            result.reserve(arr.size());
+            for (const auto& elem : arr) {
+                if (elem.type() == SeinValue::Type::Int)
+                    result.push_back(std::to_string(elem.as_int()));
+                else if (elem.type() == SeinValue::Type::Float)
+                    result.push_back(std::to_string(elem.as_float()));
+                else
+                    result.emplace_back(elem.string_ref());
+            }
+            return result;
+        }
+        if (v->type() == SeinValue::Type::Int)
+            return { std::to_string(v->as_int()) };
+        if (v->type() == SeinValue::Type::Float)
+            return { std::to_string(v->as_float()) };
+        return split_value(v->string_ref(), delim);
     }
 
     inline std::vector<float> get_float_array(const Config& cfg,
         std::string_view section, std::string_view key, char delim = ';')
     {
-        auto tokens = get_array(cfg, section, key, delim);
+        const SeinValue* v = get_value_ptr(cfg, section, key);
+        if (!v) return {};
+        if (v->type() == SeinValue::Type::Array) {
+            const auto& arr = std::get<std::vector<SeinValue>>(v->data);
+            std::vector<float> result;
+            result.reserve(arr.size());
+            for (const auto& elem : arr)
+                result.push_back(elem.as_float());
+            return result;
+        }
+        if (v->type() == SeinValue::Type::Float)
+            return { v->as_float() };
+        if (v->type() == SeinValue::Type::Int)
+            return { static_cast<float>(v->as_int()) };
+        auto tokens = split_value(v->string_ref(), delim);
         std::vector<float> result;
         result.reserve(tokens.size());
         for (const auto& t : tokens) {
@@ -723,7 +757,21 @@ namespace fd::sein {
     inline std::vector<int> get_int_array(const Config& cfg,
         std::string_view section, std::string_view key, char delim = ';')
     {
-        auto tokens = get_array(cfg, section, key, delim);
+        const SeinValue* v = get_value_ptr(cfg, section, key);
+        if (!v) return {};
+        if (v->type() == SeinValue::Type::Array) {
+            const auto& arr = std::get<std::vector<SeinValue>>(v->data);
+            std::vector<int> result;
+            result.reserve(arr.size());
+            for (const auto& elem : arr)
+                result.push_back(elem.as_int());
+            return result;
+        }
+        if (v->type() == SeinValue::Type::Int)
+            return { v->as_int() };
+        if (v->type() == SeinValue::Type::Float)
+            return { static_cast<int>(v->as_float()) };
+        auto tokens = split_value(v->string_ref(), delim);
         std::vector<int> result;
         result.reserve(tokens.size());
         for (const auto& t : tokens) {
@@ -1096,4 +1144,4 @@ namespace fd::sein {
         return doc;
     }
 
-} // namespace fd::sein //
+}

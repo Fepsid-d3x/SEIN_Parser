@@ -14,9 +14,126 @@ import textwrap
 import threading
 from dataclasses import dataclass, field
 from enum import Enum, auto
-from typing import Optional
+from typing import Optional, Union
 
-Config = dict[str, dict[str, str]]
+
+# Typed value system #
+
+class SeinType(Enum):
+    String = auto()
+    Int    = auto()
+    Float  = auto()
+    Array  = auto()
+
+
+class SeinValue:
+    """Typed config value — int, float, array, or string."""
+
+    __slots__ = ('_type', '_data')
+
+    def __init__(self, data: Union[str, int, float, list]):
+        if isinstance(data, bool):
+            self._type = SeinType.Int
+            self._data: Union[str, int, float, list] = int(data)
+        elif isinstance(data, int):
+            self._type = SeinType.Int
+            self._data = data
+        elif isinstance(data, float):
+            self._type = SeinType.Float
+            self._data = data
+        elif isinstance(data, list):
+            self._type = SeinType.Array
+            self._data = data
+        else:
+            self._type = SeinType.String
+            self._data = str(data)
+
+    @property
+    def type(self) -> SeinType:
+        return self._type
+
+    def string_view(self) -> str:
+        if self._type == SeinType.String:
+            return self._data  # type: ignore[return-value]
+        return ''
+
+    def string_ref(self) -> str:
+        return self.string_view()
+
+    def as_int(self, fallback: int = 0) -> int:
+        if self._type == SeinType.Int:
+            return self._data  # type: ignore[return-value]
+        if self._type == SeinType.Float:
+            return int(self._data)  # type: ignore[arg-type]
+        if self._type == SeinType.String:
+            try:
+                return int(self._data)  # type: ignore[arg-type]
+            except (ValueError, TypeError):
+                return fallback
+        return fallback
+
+    def as_float(self, fallback: float = 0.0) -> float:
+        if self._type == SeinType.Float:
+            return self._data  # type: ignore[return-value]
+        if self._type == SeinType.Int:
+            return float(self._data)  # type: ignore[arg-type]
+        if self._type == SeinType.String:
+            try:
+                return float(self._data)  # type: ignore[arg-type]
+            except (ValueError, TypeError):
+                return fallback
+        return fallback
+
+    def as_bool(self, fallback: bool = False) -> bool:
+        if self._type == SeinType.Int:
+            return self._data != 0
+        if self._type == SeinType.Float:
+            return self._data != 0.0
+        if self._type == SeinType.String:
+            s = self._data.lower()  # type: ignore[union-attr]
+            if s in ('true', 'yes', '1'):
+                return True
+            if s in ('false', 'no', '0'):
+                return False
+        return fallback
+
+    def as_str(self, fallback: str = '') -> str:
+        if self._type == SeinType.String:
+            return self._data  # type: ignore[return-value]
+        if self._type == SeinType.Int:
+            return str(self._data)
+        if self._type == SeinType.Float:
+            return str(self._data)
+        if self._type == SeinType.Array:
+            return '; '.join(
+                v.as_str() if isinstance(v, SeinValue) else str(v)
+                for v in self._data  # type: ignore[union-attr]
+            )
+        return fallback
+
+    def __repr__(self) -> str:
+        return f'SeinValue({self._type.name}, {self._data!r})'
+
+
+def _make_value(sv: str) -> SeinValue:
+    """Build a typed SeinValue from a final substituted string."""
+    if not sv:
+        return SeinValue('')
+    try:
+        ival = int(sv)
+        if str(ival) == sv:
+            return SeinValue(ival)
+    except (ValueError, TypeError):
+        pass
+    try:
+        fval = float(sv)
+        return SeinValue(fval)
+    except (ValueError, TypeError):
+        pass
+    return SeinValue(sv)
+
+
+Config = dict[str, dict[str, SeinValue]]
 
 
 # Internal helpers #
@@ -77,7 +194,8 @@ def _substitute_value(
                     if dot != -1:
                         section = var_name[:dot]
                         key = var_name[dot + 1:]
-                        result.append(config.get(section, {}).get(key, ''))
+                        sv = config.get(section, {}).get(key)
+                        result.append(sv.as_str() if sv is not None else '')
                     else:
                         # @set takes priority over OS environment #
                         if var_name in vars_:
@@ -132,8 +250,8 @@ def _parse_file(
             end_pos = line.find(')R"')
             if end_pos != -1:
                 raw_val += line[:end_pos]
-                final_val = _substitute_value(_dedent(raw_val), result, vars_)
-                result.setdefault(current_section, {})[raw_key] = final_val
+                final_str = _substitute_value(_dedent(raw_val), result, vars_)
+                result.setdefault(current_section, {})[raw_key] = _make_value(final_str)
                 raw_key = raw_val = ''
                 in_raw = False
             else:
@@ -149,10 +267,10 @@ def _parse_file(
             stripped = _trim(clean)
             multiline_val += ' ' + stripped
             if not continues:
-                final_val = _substitute_value(
+                final_str = _substitute_value(
                     _strip_quotes(_trim(multiline_val)), result, vars_
                 )
-                result.setdefault(current_section, {})[multiline_key] = final_val
+                result.setdefault(current_section, {})[multiline_key] = _make_value(final_str)
                 multiline_key = multiline_val = ''
                 in_multiline = False
             continue
@@ -212,7 +330,7 @@ def _parse_file(
             end_pos = val.find(')R"', 3)
             if end_pos != -1:
                 raw_str = _substitute_value(val[3:end_pos], result, vars_)
-                result.setdefault(current_section, {})[key] = raw_str
+                result.setdefault(current_section, {})[key] = _make_value(raw_str)
             else:
                 raw_key = key
                 raw_val = val[3:] + '\n'
@@ -226,8 +344,8 @@ def _parse_file(
             in_multiline  = True
             continue
 
-        final_val = _substitute_value(_strip_quotes(val), result, vars_)
-        result.setdefault(current_section, {})[key] = final_val
+        final_str = _substitute_value(_strip_quotes(val), result, vars_)
+        result.setdefault(current_section, {})[key] = _make_value(final_str)
 
 
 def _resolve_inheritance(result: Config, inherit: dict[str, str]) -> None:
@@ -262,7 +380,7 @@ class SeinResult:
         return self._thread is None or not self._thread.is_alive()
 
     # Convenience pass-through so callers can use result[section] directly #
-    def __getitem__(self, key: str) -> dict[str, str]:
+    def __getitem__(self, key: str) -> dict[str, SeinValue]:
         return self.data[key]
 
     def get(self, key: str, default=None):
@@ -302,39 +420,35 @@ def parse_sein(path: str, usage_async: bool = False) -> SeinResult:
 
 # Getter helpers #
 
+def get_value_ptr(cfg: Config, section: str, key: str) -> Optional[SeinValue]:
+    """Return the SeinValue for section/key, or None if not found."""
+    sec = cfg.get(section)
+    if sec is None:
+        return None
+    return sec.get(key)
+
+
 def get_value(cfg: Config, section: str, key: str, fallback: str = '') -> str:
-    return cfg.get(section, {}).get(key, fallback)
+    v = get_value_ptr(cfg, section, key)
+    if v is None:
+        return fallback
+    s = v.as_str()
+    return s if s else fallback
 
 
 def get_int(cfg: Config, section: str, key: str, fallback: int = 0) -> int:
-    val = get_value(cfg, section, key)
-    if not val:
-        return fallback
-    try:
-        return int(val)
-    except (ValueError, TypeError):
-        return fallback
+    v = get_value_ptr(cfg, section, key)
+    return v.as_int(fallback) if v is not None else fallback
 
 
 def get_float(cfg: Config, section: str, key: str, fallback: float = 0.0) -> float:
-    val = get_value(cfg, section, key)
-    if not val:
-        return fallback
-    try:
-        return float(val)
-    except (ValueError, TypeError):
-        return fallback
+    v = get_value_ptr(cfg, section, key)
+    return v.as_float(fallback) if v is not None else fallback
 
 
 def get_bool(cfg: Config, section: str, key: str, fallback: bool = False) -> bool:
-    val = get_value(cfg, section, key).lower()
-    if not val:
-        return fallback
-    if val in ('true', 'yes', '1'):
-        return True
-    if val in ('false', 'no', '0'):
-        return False
-    return fallback
+    v = get_value_ptr(cfg, section, key)
+    return v.as_bool(fallback) if v is not None else fallback
 
 
 def split_value(val: str, delim: str = ';') -> list[str]:
@@ -342,12 +456,36 @@ def split_value(val: str, delim: str = ';') -> list[str]:
 
 
 def get_array(cfg: Config, section: str, key: str, delim: str = ';') -> list[str]:
-    return split_value(get_value(cfg, section, key), delim)
+    v = get_value_ptr(cfg, section, key)
+    if v is None:
+        return []
+    if v.type == SeinType.Array:
+        return [
+            e.as_str() if isinstance(e, SeinValue) else str(e)
+            for e in v._data  # type: ignore[union-attr]
+        ]
+    if v.type == SeinType.Int:
+        return [str(v.as_int())]
+    if v.type == SeinType.Float:
+        return [str(v.as_float())]
+    return split_value(v.string_ref(), delim)
 
 
 def get_int_array(cfg: Config, section: str, key: str, delim: str = ';') -> list[int]:
+    v = get_value_ptr(cfg, section, key)
+    if v is None:
+        return []
+    if v.type == SeinType.Array:
+        return [
+            e.as_int() if isinstance(e, SeinValue) else int(e)
+            for e in v._data  # type: ignore[union-attr]
+        ]
+    if v.type == SeinType.Int:
+        return [v.as_int()]
+    if v.type == SeinType.Float:
+        return [int(v.as_float())]
     result = []
-    for t in get_array(cfg, section, key, delim):
+    for t in split_value(v.string_ref(), delim):
         try:
             result.append(int(t))
         except (ValueError, TypeError):
@@ -356,12 +494,49 @@ def get_int_array(cfg: Config, section: str, key: str, delim: str = ';') -> list
 
 
 def get_float_array(cfg: Config, section: str, key: str, delim: str = ';') -> list[float]:
+    v = get_value_ptr(cfg, section, key)
+    if v is None:
+        return []
+    if v.type == SeinType.Array:
+        return [
+            e.as_float() if isinstance(e, SeinValue) else float(e)
+            for e in v._data  # type: ignore[union-attr]
+        ]
+    if v.type == SeinType.Float:
+        return [v.as_float()]
+    if v.type == SeinType.Int:
+        return [float(v.as_int())]
     result = []
-    for t in get_array(cfg, section, key, delim):
+    for t in split_value(v.string_ref(), delim):
         try:
             result.append(float(t))
         except (ValueError, TypeError):
             result.append(0.0)
+    return result
+
+
+def get_subkey(cfg: Config, section: str, key: str, subkey: str,
+               fallback: str = '') -> str:
+    """Get value of key[subkey] = value style entries."""
+    composite = f'{key}[{subkey}]'
+    v = get_value_ptr(cfg, section, composite)
+    if v is None:
+        return fallback
+    return v.as_str(fallback)
+
+
+def get_subkeys(cfg: Config, section: str, key: str) -> list[str]:
+    """Return all subkey names for entries of the form key[subkey]."""
+    sec = cfg.get(section)
+    if sec is None:
+        return []
+    prefix = f'{key}['
+    result = []
+    for k in sec:
+        if k.startswith(prefix) and k.endswith(']'):
+            inner = k[len(prefix):-1]
+            inner = _strip_quotes(inner)
+            result.append(inner)
     return result
 
 
@@ -474,6 +649,20 @@ def remove_value(doc: SeinDocument, section: str, key: str) -> None:
     sec = find_section(doc, section)
     if sec:
         sec.entries = [kv for kv in sec.entries if kv.key != key]
+
+
+def add_subkey_value(doc: SeinDocument, section: str, key: str,
+                     subkey: str, value: str, comment: str = '') -> None:
+    """Add an entry of the form key[subkey] = value."""
+    composite = f'{key}[{subkey}]'
+    add_value(doc, section, composite, value, comment)
+
+
+def remove_subkey_value(doc: SeinDocument, section: str, key: str,
+                        subkey: str) -> None:
+    """Remove an entry of the form key[subkey]."""
+    composite = f'{key}[{subkey}]'
+    remove_value(doc, section, composite)
 
 
 # Serialization helpers #
