@@ -1,5 +1,9 @@
 #pragma once
 
+////////////////////////////////
+// BSD 2-Clause License       //
+//                            //
+// Copyright (c) 2026, Fepsid //
 ///////////////////////////////////////////////////////////////////
 // sein.hpp - Single-header SEIN config parser (C++17)           //
 //                                                               //

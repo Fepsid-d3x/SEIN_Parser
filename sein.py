@@ -1,7 +1,13 @@
 from __future__ import annotations
 
 """
-sein.py — SEIN config parser (Python 3.8+)
+////////////////////////////////
+// BSD 2-Clause License       //
+//                            //
+// Copyright (c) 2026, Fepsid //
+////////////////////////////////
+
+sein.py - SEIN config parser (Python 3.8+)
 
 Async:
     result = parse_sein(path, usage_async=True)

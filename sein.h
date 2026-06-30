@@ -1,9 +1,13 @@
-/*
-= sein.h - Single-header SEIN config parser (C11)
-=
-= Async:
-=   Pass usage_async=true to sein_parse(); call sein_wait(cfg) before using data
-*/
+////////////////////////////////
+// BSD 2-Clause License       //
+//                            //
+// Copyright (c) 2026, Fepsid //
+////////////////////////////////////////////////////////////////////////////////////////
+// sein.h - Single-header SEIN config parser (C11)                                    //
+//                                                                                    //
+// Async:                                                                             //
+//   Pass usage_async=true to sein_parse(); call sein_wait(cfg) before using data     //
+////////////////////////////////////////////////////////////////////////////////////////
 
 #ifndef SEIN_H
 #define SEIN_H
