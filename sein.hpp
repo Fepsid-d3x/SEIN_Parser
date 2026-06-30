@@ -1,13 +1,13 @@
 #pragma once
 
-/*
-= sein.hpp - Single-header SEIN config parser (C++17)
-=
-= Async:
-=   auto handle = parse_sein(path, true);
-=   handle.wait(); // block until parsing is complete //
-=   auto& cfg = handle.data;  // then use the config //
-*/
+///////////////////////////////////////////////////////////////////
+// sein.hpp - Single-header SEIN config parser (C++17)           //
+//                                                               //
+// Async:                                                        //
+//   auto handle = parse_sein(path, true);                       //
+//   handle.wait(); - block until parsing is complete            //
+//   auto& cfg = handle.data;  - then use the config             //
+////////////////////////////////////////////////////////////////////
 
 #include <string>
 #include <string_view>
@@ -17,14 +17,11 @@
 #include <iostream>
 #include <unordered_map>
 #include <charconv>
-#include <atomic>
 #include <thread>
 #include <future>
-#include <functional>
 #include <cstdlib>
 #include <cstring>
 
-// mmap support //
 #if defined(__unix__) || defined(__linux__) || defined(__APPLE__)
 #  define SEIN_HPP_MMAP 1
 #  include <sys/mman.h>
@@ -41,8 +38,7 @@
 
 namespace fd::sein {
 
-    // Types //
-
+    // types //
     struct SeinValue {
         enum class Type { String, Int, Float, Array };
 
@@ -113,26 +109,21 @@ namespace fd::sein {
     using Config = std::unordered_map<std::string,
                    std::unordered_map<std::string, SeinValue>>;
 
-    // SeinResult - returned by parse_sein() //
-    // Holds data + optional async future //
     struct SeinResult {
-        Config               data;
-        bool                 ok    = false;
+        Config data;
+        bool ok = false;
         std::shared_future<void> ready; // valid only when async //
 
-        // Block until parsing completes (no-op for sync) //
-        void wait() const {
-            if (ready.valid()) ready.wait();
-        }
+        // block until parsing completes //
+        void wait() const { if (ready.valid()) ready.wait(); }
 
-        // True if parsing is complete //
+        // true if parsing is complete //
         bool done() const {
             if (!ready.valid()) return true;
             return ready.wait_for(std::chrono::seconds(0)) == std::future_status::ready;
         }
     };
 
-    // Detail helpers //
     namespace detail {
 
     inline std::string_view trim_view(std::string_view s) {
@@ -148,7 +139,7 @@ namespace fd::sein {
         return std::string(v);
     }
 
-    // Strip comment, respecting quoted strings //
+    // strip comment, respecting quoted strings //
     inline std::string_view strip_comment_view(std::string_view line) {
         bool in_quote = false;
         for (size_t i = 0; i < line.size(); ++i) {
@@ -208,11 +199,11 @@ namespace fd::sein {
         return result;
     }
 
-    // Build a typed SeinValue from a final substituted string //
+    // build a typed SeinValue from a final substituted string //
     inline SeinValue make_value(std::string_view sv) {
         if (sv.empty()) return SeinValue(std::string{});
 
-        // try int //
+        // int //
         int ival = 0;
         {
             auto [p, ec] = std::from_chars(sv.data(), sv.data() + sv.size(), ival);
@@ -220,7 +211,7 @@ namespace fd::sein {
                 return SeinValue(ival);
         }
 
-        // try float //
+        // float //
 #if defined(__cpp_lib_to_chars) && __cpp_lib_to_chars >= 201611L
         float fval = 0.f;
         {
@@ -233,9 +224,8 @@ namespace fd::sein {
         return SeinValue(std::string(sv));
     }
 
-    // Expand ${VAR}, ${section.key}, ${SYSENV:VAR} //
-    inline std::string substitute_value(std::string_view val,
-        const Config& config,
+    // expand ${VAR}, ${section.key}, ${SYSENV:VAR} //
+    inline std::string substitute_value(std::string_view val, const Config& config,
         const std::unordered_map<std::string, std::string>& vars)
     {
         if (val.empty()) return {};
@@ -257,7 +247,7 @@ namespace fd::sein {
                 if (brace_end != std::string_view::npos) {
                     auto var_name = val.substr(dollar + 2, brace_end - dollar - 2);
 
-                    // ${SYSENV:VAR} - only OS environment //
+                    // ${SYSENV:VAR} - only os environment //
                     if (var_name.size() > 7 && var_name.substr(0, 7) == "SYSENV:") {
                         std::string env_key(var_name.substr(7));
                         const char *ev = std::getenv(env_key.c_str());
@@ -274,7 +264,7 @@ namespace fd::sein {
                                     result += k_it->second.string_ref();
                             }
                         } else {
-                            // @set takes priority over OS environment //
+                            // @set takes priority over os environment //
                             std::string var_str(var_name);
                             auto v_it = vars.find(var_str);
                             if (v_it != vars.end()) {
@@ -296,7 +286,6 @@ namespace fd::sein {
     }
 
     // mmap line source //
-
     struct LineSrc {
 #if defined(SEIN_HPP_MMAP)
         int         fd   = -1;
@@ -358,17 +347,29 @@ namespace fd::sein {
                 CloseHandle(hfile); hfile = INVALID_HANDLE_VALUE;
             }
 #endif
-            // stdio fallback — read entire file into string //
+            // stdio fallback - read entire file into string //
             FILE *f = fopen(spath.c_str(), "r");
             if (!f) return false;
             char tmp[4096];
-            while (size_t n = fread(tmp, 1, sizeof(tmp), f)) text.append(tmp, n);
+            while (true) {
+                size_t n = fread(tmp, 1, sizeof(tmp), f);
+                if (n > 0) {
+                    text.append(tmp, n);
+                }
+                if (n < sizeof(tmp)) {
+                    if (feof(f)) break;
+                    if (ferror(f)) {
+                        // "The biggest mistake you can make in life is constantly afraid to make a mistake." - Elbert Hubbard //
+                        break;
+                    }
+                }
+            }
             fclose(f);
             use_text = true;
             return true;
         }
 
-        // Returns pointer to next line or nullptr at EOF //
+        // returns pointer to next line or nullptr at eof //
         const std::string *readline() {
             const char *src = nullptr;
             size_t      src_len = 0;
@@ -405,12 +406,10 @@ namespace fd::sein {
         }
     };
 
-    // core file parser //
-
-    // Inheritance map: child -> parent section name //
+    // inheritance map: child -> parent section name //
     using InheritMap = std::unordered_map<std::string, std::string>;
 
-    // Returns true if the file was successfully opened //
+    // returns true if the file was successfully opened //
     inline bool parse_file(std::string_view path,
         Config& result,
         std::unordered_map<std::string, std::string>& vars,
@@ -526,6 +525,8 @@ namespace fd::sein {
                     current_section = child_name;
                     if (!parent_name.empty())
                         inherit[current_section] = parent_name;
+
+                    // “He who leaves his parents in old age will not enter Paradise.” – Mohammed (Magomet) //
                 } else {
                     current_section = trim(inner);
                 }
@@ -587,12 +588,11 @@ namespace fd::sein {
         }
     }
 
-    } // detail //
+    }
 
-    // Public parse API  //
-
-    //  parse_sein(path)              — synchronous, returns SeinResult with data ready //
-    //    parse_sein(path, true)        — async; call result.wait() before using result.data //
+    // Public API                                                                   //
+    //  parse_sein(path) - synchronous, returns SeinResult with data ready          //
+    //  parse_sein(path, true) - async; call result.wait() before using result.data //
     inline SeinResult parse_sein(std::string_view path, bool usage_async = false)
     {
         if (!usage_async) {
@@ -627,7 +627,7 @@ namespace fd::sein {
         return sr;
     }
 
-    // Getters //
+    // getters //
     inline const SeinValue* get_value_ptr(const Config& cfg,
         std::string_view section, std::string_view key)
     {
@@ -680,8 +680,7 @@ namespace fd::sein {
         return v ? v->as_bool(fallback) : fallback;
     }
 
-    // Array helpers //
-
+    // array helpers //
     inline std::vector<std::string> split_value(std::string_view val, char delim = ';') {
         std::vector<std::string> result;
         size_t start = 0;
@@ -782,8 +781,7 @@ namespace fd::sein {
         return result;
     }
 
-    // Subkey helpers — key[subkey] = value //
-
+    // subkey helpers - key[subkey] = value //
     inline std::string_view get_subkey_view(const Config& cfg,
         std::string_view section, std::string_view key, std::string_view subkey)
     {
@@ -800,8 +798,13 @@ namespace fd::sein {
         std::string_view section, std::string_view key, std::string_view subkey,
         std::string_view fallback = {})
     {
-        auto v = get_subkey_view(cfg, section, key, subkey);
-        return v.empty() ? std::string(fallback) : std::string(v);
+        std::string composite;
+        composite.reserve(key.size() + subkey.size() + 2);
+        composite.append(key);
+        composite += '[';
+        composite.append(subkey);
+        composite += ']';
+        return get_value(cfg, section, composite, fallback);
     }
 
     inline std::vector<std::string> get_subkeys(const Config& cfg,
@@ -826,7 +829,105 @@ namespace fd::sein {
         return result;
     }
 
-    // Writer API - types //
+    // multi-dubkey helpers — key[subkey1][subkey2] = value //
+    inline std::string normalize_nested_key(std::string_view k) {
+        std::string result;
+        size_t pos = 0;
+
+        while (pos < k.size()) {
+            size_t bracket_start = k.find('[', pos);
+            if (bracket_start == std::string_view::npos) {
+                result.append(k.substr(pos));
+                break;
+            }
+
+            result.append(k.substr(pos, bracket_start - pos));
+
+            size_t bracket_end = k.find(']', bracket_start);
+            if (bracket_end == std::string_view::npos) {
+                result.append(k.substr(bracket_start));
+                break;
+            }
+
+            // strip quotes from the content inside brackets, keep bracket delimiters
+            std::string_view inner = k.substr(bracket_start + 1, bracket_end - bracket_start - 1);
+            inner = detail::strip_quotes_view(inner);
+
+            result += '[';
+            result.append(inner);
+            result += ']';
+
+            pos = bracket_end + 1;
+        }
+
+        return result;
+    }
+
+    // get multi-level subkey: get_subkey_multi(cfg, "section", "field", {"Object3D", "model"}) //
+    inline std::string get_subkey_multi(const Config& cfg,
+        std::string_view section, std::string_view key,
+        const std::vector<std::string_view>& levels,
+        std::string_view fallback = {})
+    {
+        std::string composite = std::string(key);
+        for (const auto& level : levels) {
+            composite += '[';
+            composite.append(level);
+            composite += ']';
+        }
+        return get_value(cfg, section, composite, fallback);
+    }
+
+    // deprecated: returns string_view which is empty for non-string types; prefer get_subkey_multi
+    inline std::string_view get_subkey_multi_view(const Config& cfg,
+        std::string_view section, std::string_view key,
+        const std::vector<std::string_view>& levels)
+    {
+        std::string composite = std::string(key);
+        for (const auto& level : levels) {
+            composite += '[';
+            composite.append(level);
+            composite += ']';
+        }
+        return get_value_view(cfg, section, composite);
+    }
+    inline std::vector<std::vector<std::string>> get_nested_subkeys(
+        const Config& cfg, std::string_view section, std::string_view key)
+    {
+        std::vector<std::vector<std::string>> result;
+        auto s = cfg.find(std::string(section));
+        if (s == cfg.end()) return result;
+
+        std::string prefix = std::string(key) + '[';
+
+        for (const auto& [k, v] : s->second) {
+            if (k.size() > prefix.size() && k.compare(0, prefix.size(), prefix) == 0) {
+                std::vector<std::string> levels;
+                std::string_view remaining(k.data() + key.size(), k.size() - key.size());
+
+                while (!remaining.empty() && remaining.front() == '[') {
+                    remaining.remove_prefix(1); // skip '[' //
+                    size_t end = remaining.find(']');
+                    if (end == std::string_view::npos) break;
+
+                    std::string_view level = remaining.substr(0, end);
+                    level = detail::strip_quotes_view(level);
+                    levels.push_back(std::string(level));
+
+                    remaining = remaining.substr(end + 1);
+                }
+
+                if (!levels.empty()) {
+                    result.push_back(std::move(levels));
+                }
+            }
+        }
+
+        return result;
+    }
+
+
+    // writer API  (types) //
     struct SeinKeyValue {
         std::string key;
         std::string value;
@@ -854,9 +955,9 @@ namespace fd::sein {
         bool                       usage_async = false;
     };
 
-    // Writer API — doc_ functions //
-    // create a new empty document
-    //      usage_async=true stores the flag for future async saves//
+    // writer API - doc_ functions                                  //
+    // create a new empty document                                  //
+    // usage_async=true stores the flag for future async saves      //
     inline SeinDocument doc_create_new_config(std::string_view path,
                                               bool usage_async = false)
     {
@@ -910,7 +1011,6 @@ namespace fd::sein {
     }
 
     // sections //
-
     inline SeinSection* doc_find_section(SeinDocument& doc, std::string_view name)
     {
         for (auto& s : doc.sections)
@@ -937,7 +1037,6 @@ namespace fd::sein {
     }
 
     // key / value //
-
     inline void doc_add_value(SeinDocument& doc, std::string_view section,
                               std::string_view key, std::string_view value,
                               std::string_view comment = {})
@@ -976,6 +1075,19 @@ namespace fd::sein {
         doc_add_value(doc, section, composite, value, comment);
     }
 
+    inline void doc_add_subkey_multi_value(SeinDocument& doc, std::string_view section,
+        std::string_view key, const std::vector<std::string_view>& levels,
+        std::string_view value, std::string_view comment = {})
+    {
+        std::string composite = std::string(key);
+        for (const auto& level : levels) {
+            composite += '[';
+            composite.append(level);
+            composite += ']';
+        }
+        doc_add_value(doc, section, composite, value, comment);
+    }
+
     inline void doc_remove_subkey_value(SeinDocument& doc, std::string_view section,
                                         std::string_view key, std::string_view subkey)
     {
@@ -989,7 +1101,6 @@ namespace fd::sein {
     }
 
     // serialization helpers //
-
     namespace detail {
 
     inline bool needs_quotes(std::string_view v)
@@ -1013,10 +1124,9 @@ namespace fd::sein {
         if (!c.empty()) { out += "  # "; out.append(c); }
     }
 
-    } // detail //
+    } 
 
     // save / load //
-
     inline bool doc_save_config(const SeinDocument& doc, std::string_view path)
     {
         FILE *f = fopen(std::string(path).c_str(), "w");

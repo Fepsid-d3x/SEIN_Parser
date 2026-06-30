@@ -5,8 +5,6 @@
 
 ---
 
-(Used in FD-SoulEngine)
-
 A very lightweight **single-file** .ini-style config parser for C++17 / C11 / Python.
 (`.sein` extension, but works with any text file)
 
