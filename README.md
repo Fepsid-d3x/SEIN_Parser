@@ -3,10 +3,16 @@
 ---
 ![VS Marketplace](https://img.shields.io/badge/Install%20from-VS%20Marketplace-blue?logo=visualstudiocode) ![C++](https://img.shields.io/badge/C++-17-blue) ![C](https://img.shields.io/badge/C-11-blue) ![Python](https://img.shields.io/badge/Python-3.8+-yellow)
 
+[![DOCTEST](https://img.shields.io/badge/DOCTEST-v2.5.2-green)](sein_test.cxx)
+
 ---
 
 A very lightweight **single-file** .ini-style config parser for C++17 / C11 / Python.
 (`.sein` extension, but works with any text file)
+
+---
+Note: C++ version is updated more often and is more stable
+---
 
 ## Supports
 - Sections `[SectionName]`

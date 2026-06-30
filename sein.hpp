@@ -148,7 +148,12 @@ namespace fd::sein {
         bool in_quote = false;
         for (size_t i = 0; i < line.size(); ++i) {
             if (line[i] == '"') in_quote = !in_quote;
-            if (!in_quote && line[i] == '#') return line.substr(0, i);
+            if (!in_quote && line[i] == '#') {
+                bool preceded_ok = (i == 0 || line[i - 1] == ' ' || line[i - 1] == '\t');
+                bool followed_ok = (i + 1 == line.size() || line[i + 1] == ' ' || line[i + 1] == '\t');
+                if (preceded_ok && followed_ok)
+                    return line.substr(0, i);
+            }
         }
         return line;
     }
@@ -228,7 +233,7 @@ namespace fd::sein {
         return SeinValue(std::string(sv));
     }
 
-    // expand ${VAR}, ${section.key}, ${SYSENV:VAR} //
+    // expand ${VAR}, @{VAR}, ${section.key}, ${SYSENV:VAR} //
     inline std::string substitute_value(std::string_view val, const Config& config,
         const std::unordered_map<std::string, std::string>& vars)
     {
@@ -239,7 +244,7 @@ namespace fd::sein {
         size_t pos = 0;
 
         while (pos < val.size()) {
-            size_t dollar = val.find('$', pos);
+            size_t dollar = val.find_first_of("$@", pos);
             if (dollar == std::string_view::npos) {
                 result.append(val.substr(pos));
                 break;
@@ -373,6 +378,14 @@ namespace fd::sein {
             return true;
         }
 
+        // open from an in-memory string instead of a file //
+        bool open_string(std::string_view content) {
+            text.assign(content.data(), content.size());
+            use_text = true;
+            text_pos = 0;
+            return true;
+        }
+
         // returns pointer to next line or nullptr at eof //
         const std::string *readline() {
             const char *src = nullptr;
@@ -413,31 +426,20 @@ namespace fd::sein {
     // inheritance map: child -> parent section name //
     using InheritMap = std::unordered_map<std::string, std::string>;
 
-    // returns true if the file was successfully opened //
+    // forward declaration: parse_lines (for @include) calls parse_file //
     inline bool parse_file(std::string_view path,
         Config& result,
         std::unordered_map<std::string, std::string>& vars,
         InheritMap& inherit,
-        int depth = 0)
+        int depth = 0);
+
+    // core line-processing loop, shared by file- and string-based parsing //
+    inline bool parse_lines(LineSrc& src, std::string_view base_dir,
+        Config& result,
+        std::unordered_map<std::string, std::string>& vars,
+        InheritMap& inherit,
+        int depth)
     {
-        if (depth > 8) {
-            std::cerr << "[SEIN Parser]: @include depth limit reached at: " << path << "\n";
-            return false;
-        }
-
-        LineSrc src;
-        if (!src.open(path)) {
-            std::cerr << "[SEIN Parser]: Failed to open: " << path << "\n";
-            return false;
-        }
-
-        std::string base_dir;
-        {
-            size_t sl = path.find_last_of("/\\");
-            if (sl != std::string_view::npos)
-                base_dir.assign(path.substr(0, sl + 1));
-        }
-
         std::string current_section = "Default";
 
         std::string multiline_key;
@@ -574,8 +576,58 @@ namespace fd::sein {
             result[current_section][key] = make_value(substitute_value(fv, result, vars));
         }
 
-        src.close();
         return true;
+    }
+
+    // returns true if the file was successfully opened //
+    inline bool parse_file(std::string_view path,
+        Config& result,
+        std::unordered_map<std::string, std::string>& vars,
+        InheritMap& inherit,
+        int depth)
+    {
+        if (depth > 8) {
+            std::cerr << "[SEIN Parser]: @include depth limit reached at: " << path << "\n";
+            return false;
+        }
+
+        LineSrc src;
+        if (!src.open(path)) {
+            std::cerr << "[SEIN Parser]: Failed to open: " << path << "\n";
+            return false;
+        }
+
+        std::string base_dir;
+        {
+            size_t sl = path.find_last_of("/\\");
+            if (sl != std::string_view::npos)
+                base_dir.assign(path.substr(0, sl + 1));
+        }
+
+        bool ok = parse_lines(src, base_dir, result, vars, inherit, depth);
+        src.close();
+        return ok;
+    }
+
+    // parse SEIN content directly from an in-memory string, no file access //
+    inline bool parse_string(std::string_view content,
+        Config& result,
+        std::unordered_map<std::string, std::string>& vars,
+        InheritMap& inherit,
+        std::string_view base_dir = {},
+        int depth = 0)
+    {
+        if (depth > 8) {
+            std::cerr << "[SEIN Parser]: @include depth limit reached while parsing string\n";
+            return false;
+        }
+
+        LineSrc src;
+        src.open_string(content);
+
+        bool ok = parse_lines(src, base_dir, result, vars, inherit, depth);
+        src.close();
+        return ok;
     }
 
     // apply section inheritance: copy parent keys not defined in child //
@@ -628,6 +680,19 @@ namespace fd::sein {
             p.set_value();
         }).detach();
 
+        return sr;
+    }
+
+    // parse SEIN content directly from an in-memory string (no file access) //
+    //  base_dir - optional directory used to resolve any @include directives //
+    inline SeinResult parse_from_string(std::string_view content, std::string_view base_dir = {})
+    {
+        SeinResult sr;
+        sr.data.reserve(8);
+        std::unordered_map<std::string, std::string> vars;
+        detail::InheritMap inherit;
+        sr.ok = detail::parse_string(content, sr.data, vars, inherit, base_dir);
+        detail::resolve_inheritance(sr.data, inherit);
         return sr;
     }
 
@@ -853,7 +918,6 @@ namespace fd::sein {
                 break;
             }
 
-            // strip quotes from the content inside brackets, keep bracket delimiters
             std::string_view inner = k.substr(bracket_start + 1, bracket_end - bracket_start - 1);
             inner = detail::strip_quotes_view(inner);
 
@@ -882,7 +946,6 @@ namespace fd::sein {
         return get_value(cfg, section, composite, fallback);
     }
 
-    // deprecated: returns string_view which is empty for non-string types; prefer get_subkey_multi
     inline std::string_view get_subkey_multi_view(const Config& cfg,
         std::string_view section, std::string_view key,
         const std::vector<std::string_view>& levels)

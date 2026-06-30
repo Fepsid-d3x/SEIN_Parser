@@ -55,7 +55,7 @@
 #  define SEIN_HAS_WINTHREADS 1
 #endif
 
-// Public constants //
+// public constants //
 #define SEIN_MAX_SECTIONS      32
 #define SEIN_MAX_KEYS          64
 #define SEIN_MAX_VARS          64
@@ -69,7 +69,7 @@
 #define SEIN_MAX_COMMENT_LEN  128
 #define SEIN_MAX_PATH_LEN     512
 
-// Public types //
+// public types //
 typedef struct {
     char key[SEIN_MAX_KEY_LEN];
     char val[SEIN_MAX_VAL_LEN];
@@ -99,13 +99,12 @@ typedef struct {
 #endif
 } SeinConfig;
 
-// Public API //
-
-// Parse a .sein file. If usage_async=true the call returns immediately
-//   use sein_wait() before reading any values //
+// public API                                                            //
+// parse a .sein file. If usage_async=true the call returns immediately  //
+// use sein_wait() before reading any values                             //
 int  sein_parse(SeinConfig *cfg, const char *path, bool usage_async);
 
-// Block until an async parse finishes. Safe to call on sync parses too //
+// block until an async parse finishes. Safe to call on sync parses too //
 void sein_wait(SeinConfig *cfg);
 
 void sein_free(SeinConfig *cfg);
@@ -137,7 +136,7 @@ int sein_get_int_array  (const SeinConfig *cfg, const char *section,
                          const char *key, char delim,
                          int *out,   int max_out);
 
-// Subkey helpers — key[subkey] = value //
+// subkey helpers - key[subkey] = value //
 const char *sein_get_subkey  (const SeinConfig *cfg, const char *section,
                                const char *key, const char *subkey,
                                const char *fallback);
@@ -145,6 +144,13 @@ const char *sein_get_subkey  (const SeinConfig *cfg, const char *section,
 int         sein_get_subkeys (const SeinConfig *cfg, const char *section,
                                const char *key,
                                char out[][SEIN_MAX_KEY_LEN], int max_out);
+
+// multi-level subkey helpers — key[a][b][c] = value                //
+// "Simplicity is the ultimate sophistication." - Leonardo da Vinci //
+const char *sein_get_subkey_multi (const SeinConfig *cfg, const char *section,
+                                   const char *key,
+                                   const char *const *levels, int level_count,
+                                   const char *fallback);
 
 // Writer API - types //
 typedef enum {
@@ -184,10 +190,10 @@ typedef struct {
     bool            usage_async;
 } SeinDocument;
 
-// Writer API - declarations //
+// writer API - declarations //
 void          sein_doc_init      (SeinDocument *doc, const char *path);
 
-// create_new_config: heap-allocate a new document (usage_async stored for future saves)//
+// create_new_config: heap-allocate a new document //
 SeinDocument *create_new_config  (const char *path, bool usage_async);
 
 void          sein_doc_free      (SeinDocument *doc);
@@ -203,6 +209,10 @@ void          sein_doc_remove_section  (SeinDocument *doc, const char *name);
 
 void          sein_doc_add_subkey_value   (SeinDocument *doc, const char *section,
                                            const char *key, const char *subkey,
+                                           const char *value, const char *comment);
+void          sein_doc_add_subkey_multi_value(SeinDocument *doc, const char *section,
+                                           const char *key,
+                                           const char *const *levels, int level_count,
                                            const char *value, const char *comment);
 void          sein_doc_remove_subkey_value(SeinDocument *doc, const char *section,
                                            const char *key, const char *subkey);
@@ -261,8 +271,8 @@ static void sein__normalize_key(char *key)
     }
 }
 
-// Lock-free section lookup - acquires section_count once, then reads
-//   sequentially. Safe for concurrent readers after parse is complete //
+// lock-free section lookup - acquires section_count once, then reads //
+// sequentially. Safe for concurrent readers after parse is complete  //
 static SeinSection *sein__find_section(const SeinConfig *cfg, const char *name)
 {
     int n = SEIN_ALOAD(cfg->section_count);
@@ -347,7 +357,7 @@ static void sein__set_var(SeinConfig *cfg, const char *key, const char *val)
     SEIN_AINC(cfg->var_count);
 }
 
-// Expand ${VAR}, ${section.key}, ${SYSENV:VAR} inside *val (in-place) //
+// expand ${VAR}, ${section.key}, ${SYSENV:VAR} inside *val (in-place) //
 static void sein__substitute_value(char *val, const SeinConfig *cfg)
 {
     if (!val || *val == '\0') return;
@@ -367,7 +377,7 @@ static void sein__substitute_value(char *val, const SeinConfig *cfg)
 
                     const char *resolved = NULL;
 
-                    // ${SYSENV:VAR} - always OS environment, never @set //
+                    // ${SYSENV:VAR} - always os environment, never @set //
                     if (var_len > 7 && memcmp(var_name, "SYSENV:", 7) == 0) {
                         resolved = getenv(var_name + 7);
                     } else {
@@ -407,7 +417,7 @@ static void sein__substitute_value(char *val, const SeinConfig *cfg)
     memcpy(val, temp, dst + 1);
 }
 
-// Resolve [Child : [Parent]] inheritance after all files are parsed //
+// resolve [Child : [Parent]] inheritance after all files are parsed //
 static void sein__resolve_inheritance(SeinConfig *cfg)
 {
     int nsec = SEIN_ALOAD(cfg->section_count);
@@ -420,7 +430,6 @@ static void sein__resolve_inheritance(SeinConfig *cfg)
 
         int np = SEIN_ALOAD(parent->entry_count);
         for (int j = 0; j < np; ++j) {
-            // Only copy keys the child does not already define //
             int nc = SEIN_ALOAD(child->entry_count);
             bool exists = false;
             for (int k = 0; k < nc; ++k) {
@@ -493,7 +502,7 @@ stdio_fallback:
     return s->fp != NULL;
 }
 
-// Returns the next line into s->line_buf, returns NULL at EOF //
+// returns the next line into s->line_buf, returns NULL at EOF //
 static char *sein__src_readline(SeinSrc *s)
 {
     if (s->buf) {
@@ -788,8 +797,7 @@ static DWORD WINAPI sein__async_worker(LPVOID arg)
 }
 #endif
 
-// public API implementation //
-
+// public API//
 int sein_parse(SeinConfig *cfg, const char *path, bool usage_async)
 {
     memset(cfg, 0, sizeof(*cfg));
@@ -853,7 +861,7 @@ void sein_wait(SeinConfig *cfg)
     }
 #else
     // spin-wait fallback (should not be reached) //
-    while (!SEIN_ALOAD(cfg->_async_done)) { /* busy wait */}
+    while (!SEIN_ALOAD(cfg->_async_done)) { }
 #endif
 }
 
@@ -868,7 +876,7 @@ SeinConfig *sein_alloc(void)
 
 void sein_destroy(SeinConfig *cfg) { free(cfg); }
 
-/// Lock-free read - safe after sein_wait() //
+/// kock-free read - safe after sein_wait() //
 const char *sein_get(const SeinConfig *cfg, const char *section,
                      const char *key,   const char *fallback)
 {
@@ -999,7 +1007,7 @@ int sein_get_int_array(const SeinConfig *cfg, const char *section,
     return count;
 }
 
-// Subkey helpers — key[subkey] = value //
+// subkey helpers - key[subkey] = value //
 
 const char *sein_get_subkey(const SeinConfig *cfg, const char *section,
                              const char *key, const char *subkey,
@@ -1045,8 +1053,22 @@ int sein_get_subkeys(const SeinConfig *cfg, const char *section,
     return count;
 }
 
+// multi-level subkey helper - builds key[a][b][c] and looks it up //
+const char *sein_get_subkey_multi(const SeinConfig *cfg, const char *section,
+                                  const char *key,
+                                  const char *const *levels, int level_count,
+                                  const char *fallback)
+{
+    char composite[SEIN_MAX_KEY_LEN];
+    size_t pos = 0;
+    pos += (size_t)snprintf(composite + pos, sizeof(composite) - pos, "%s", key);
+    for (int i = 0; i < level_count && pos < sizeof(composite); ++i) {
+        pos += (size_t)snprintf(composite + pos, sizeof(composite) - pos, "[%s]", levels[i]);
+    }
+    return sein_get(cfg, section, composite, fallback);
+}
 
-// Writer API - implementation //
+
 static int sein__doc_needs_quotes(const char *v)
 {
     if (!v || *v == '\0') return 1;
@@ -1347,6 +1369,21 @@ void sein_doc_add_subkey_value(SeinDocument *doc, const char *section,
 {
     char composite[SEIN_MAX_KEY_LEN];
     snprintf(composite, sizeof(composite), "%s[%s]", key, subkey);
+    sein_doc_add_value(doc, section, composite, value, comment);
+}
+
+// "He who has a why to live can bear almost any how." - Friedrich Nietzsche //
+void sein_doc_add_subkey_multi_value(SeinDocument *doc, const char *section,
+                                      const char *key,
+                                      const char *const *levels, int level_count,
+                                      const char *value, const char *comment)
+{
+    char composite[SEIN_MAX_KEY_LEN];
+    size_t pos = 0;
+    pos += (size_t)snprintf(composite + pos, sizeof(composite) - pos, "%s", key);
+    for (int i = 0; i < level_count && pos < sizeof(composite); ++i) {
+        pos += (size_t)snprintf(composite + pos, sizeof(composite) - pos, "[%s]", levels[i]);
+    }
     sein_doc_add_value(doc, section, composite, value, comment);
 }
 

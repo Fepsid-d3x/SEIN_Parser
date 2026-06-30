@@ -468,7 +468,7 @@ def get_array(cfg: Config, section: str, key: str, delim: str = ';') -> list[str
     if v.type == SeinType.Array:
         return [
             e.as_str() if isinstance(e, SeinValue) else str(e)
-            for e in v._data  # type: ignore[union-attr]
+            for e in v._data 
         ]
     if v.type == SeinType.Int:
         return [str(v.as_int())]
@@ -484,7 +484,7 @@ def get_int_array(cfg: Config, section: str, key: str, delim: str = ';') -> list
     if v.type == SeinType.Array:
         return [
             e.as_int() if isinstance(e, SeinValue) else int(e)
-            for e in v._data  # type: ignore[union-attr]
+            for e in v._data 
         ]
     if v.type == SeinType.Int:
         return [v.as_int()]
@@ -506,7 +506,7 @@ def get_float_array(cfg: Config, section: str, key: str, delim: str = ';') -> li
     if v.type == SeinType.Array:
         return [
             e.as_float() if isinstance(e, SeinValue) else float(e)
-            for e in v._data  # type: ignore[union-attr]
+            for e in v._data 
         ]
     if v.type == SeinType.Float:
         return [v.as_float()]
@@ -588,9 +588,9 @@ class SeinDocument:
 # Document construction helpers #
 
 def create_new_config(path: str, usage_async: bool = False) -> SeinDocument:
-    """Create a new empty SeinDocument.
+    """create a new empty SeinDocument.
 
-    usage_async=True stores the flag (reserved for future async saves).
+        usage_async=True stores the flag (reserved for future async saves).
     """
     return SeinDocument(path=path, usage_async=usage_async)
 
@@ -731,7 +731,7 @@ def save_config(doc: SeinDocument, path: str = '') -> bool:
 # load_as_document #
 
 def load_as_document(path: str) -> SeinDocument:
-    """Parse an existing .sein file into a SeinDocument (round-trip safe)."""
+    """Parse an existing .sein file into a SeinDocument """
     doc = SeinDocument(path=path)
 
     try:
